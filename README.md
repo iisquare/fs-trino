@@ -241,6 +241,80 @@ JAVA_HOME=/opt/jdk-17.0.12 GRADLE_USER_HOME=/tmp/gradle-home \
 
 ## 调试
 
+### IDEA 远程调试插件
+
+插件运行在 Trino Server 的 JVM 中，不直接作为独立进程启动，因此 IDEA 使用 Remote JVM Debug 附加到 Trino 进程进行调试。
+
+1. 用 IDEA 打开 `fs-trino` 项目，Project SDK 和 Gradle JVM 均选择 JDK 25。
+
+2. 构建并部署插件：
+
+```bash
+GRADLE_USER_HOME=/tmp/gradle-home \
+  /mnt/d/openservices/gradle-9.6.0/bin/gradle clean build --no-daemon
+
+mkdir -p "$TRINO_HOME/plugin/fs-trino"
+unzip build/fs-trino-483.zip -d "$TRINO_HOME/plugin/fs-trino"
+```
+
+如果使用 `fs-docker`，将 `build/fs-trino-483.zip` 同步到：
+
+```text
+fs-docker/service/trino/plugins/fs-trino-483.zip
+```
+
+然后重新构建并启动 Trino 容器。
+
+3. 启动 Trino 时开启 JDWP 调试端口。本地发行版：
+
+```bash
+export JAVA_OPTS="-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
+"$TRINO_HOME/bin/launcher" run
+```
+
+需要在插件加载阶段命中断点时，可将 `suspend=n` 改为 `suspend=y`。
+
+Docker 方式可在 `trino` 服务中临时增加：
+
+```yaml
+environment:
+  - JAVA_OPTS=-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005
+ports:
+  - "5005:5005"
+```
+
+4. IDEA 中创建 `Remote JVM Debug` 配置：
+
+```text
+Host: localhost
+Port: 5005
+Transport: Socket
+Use module classpath: fs-trino.main
+```
+
+5. 在以下位置打断点：
+
+```text
+HttpPlugin
+HttpConnectorFactory.create()
+HttpMetadata.listSchemaNames()
+HttpMetadata.getTableHandle()
+HttpMetadata.getColumnHandles()
+HttpClient.loadTables()
+HttpClient.fetchPage()
+HttpRecordCursor.advanceNextPosition()
+```
+
+6. 启动 Debug 后，在 Trino 客户端执行：
+
+```sql
+SHOW SCHEMAS FROM fs_bi;
+SHOW TABLES FROM fs_bi.excel;
+SELECT * FROM fs_bi.excel."表名" LIMIT 10;
+```
+
+修改插件代码后，需要重新执行 `clean build`、重新部署插件包并重启 Trino，再重新 attach。
+
 ### 1. 检查服务端接口
 
 ```bash
