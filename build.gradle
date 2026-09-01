@@ -1,0 +1,71 @@
+plugins {
+    id 'java'
+}
+
+group = 'io.trino'
+version = '483'
+
+repositories {
+    mavenCentral()
+}
+
+def trinoVersion = '483'
+def airliftVersion = '439'
+def jacksonAnnotationsVersion = '2.22'
+def jacksonVersion = '2.22.1'
+def openTelemetryVersion = '1.64.0'
+
+dependencies {
+    compileOnly "io.trino:trino-spi:${trinoVersion}"
+    compileOnly "io.airlift:slice:2.8"
+    compileOnly "com.fasterxml.jackson.core:jackson-annotations:${jacksonAnnotationsVersion}"
+    compileOnly "io.opentelemetry:opentelemetry-api:${openTelemetryVersion}"
+    compileOnly "io.opentelemetry:opentelemetry-context:${openTelemetryVersion}"
+
+    implementation "io.trino:trino-plugin-toolkit:${trinoVersion}"
+    implementation "io.airlift:bootstrap:${airliftVersion}"
+    implementation "io.airlift:configuration:${airliftVersion}"
+    implementation "io.airlift:json:${airliftVersion}"
+    implementation "com.google.guava:guava:33.6.0-jre"
+    implementation "com.google.inject:guice:7.0.0"
+    implementation "jakarta.validation:jakarta.validation-api:3.1.1"
+    implementation("com.fasterxml.jackson.core:jackson-databind:${jacksonVersion}") {
+        exclude group: 'com.fasterxml.jackson.core', module: 'jackson-annotations'
+    }
+}
+
+configurations.runtimeClasspath {
+    exclude group: 'io.trino', module: 'trino-spi'
+    exclude group: 'io.airlift', module: 'slice'
+    exclude group: 'com.fasterxml.jackson.core', module: 'jackson-annotations'
+    exclude group: 'io.opentelemetry', module: 'opentelemetry-api'
+    exclude group: 'io.opentelemetry', module: 'opentelemetry-context'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 25
+}
+
+tasks.named('jar', Jar) {
+    archiveFileName = "${rootProject.name}-${version}.jar"
+}
+
+tasks.register('trinoPlugin', Zip) {
+    group = 'build'
+    description = 'Creates a deployable Trino plugin ZIP containing this plugin and its runtime dependencies.'
+    archiveFileName = "${rootProject.name}-${version}.zip"
+    destinationDirectory = layout.buildDirectory
+
+    from tasks.named('jar')
+    from configurations.runtimeClasspath
+}
+
+tasks.named('build') {
+    dependsOn tasks.named('trinoPlugin')
+}
