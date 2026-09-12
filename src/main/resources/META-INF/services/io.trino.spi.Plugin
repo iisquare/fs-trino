@@ -1,1 +1,2 @@
 io.trino.plugin.http.HttpPlugin
+io.trino.plugin.elasticsearch.ElasticsearchPlugin
