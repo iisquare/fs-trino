@@ -74,6 +74,11 @@ java {
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.release = 25
+    // 官方用 Maven 编译时带 -parameters。SPI 里大量 @JsonCreator 构造器的参数上没有 @JsonProperty
+    // （如 VarcharDecoder.Descriptor(String path)），Jackson 只能靠 class 文件里的参数名反序列化。
+    // 少了这个参数，coordinator 发出去的列句柄在 worker 侧会报
+    // "no delegate- or property-based Creator"，表现为查询失败：Unexpected response from ...?summarize
+    options.compilerArgs.add('-parameters')
 }
 
 tasks.named('jar', Jar) {

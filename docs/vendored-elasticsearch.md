@@ -50,6 +50,37 @@
 - 从 `requiredFields`（→ 请求体里的 `_source.includes`）里**排除**子字段列：它们不在 `_source` 里，留着会白取甚至报错。
 - 取值：命中的 `fields` 里是数组，数组列给整个 list，标量列取第一个；没有值时给 `NULL`。
 
+## 编译参数：`-parameters` 不能删
+
+官方用 Maven 编译，class 文件里带 `MethodParameters` 属性；Gradle 默认不带，所以 `build.gradle` 里显式加了 `-parameters`。
+
+原因在这批官方 descriptor 上：它们的 `@JsonCreator` 构造器**参数上没有 `@JsonProperty`**，例如
+
+```java
+@JsonCreator
+public Descriptor(String path) { ... }
+```
+
+Jackson 只能靠 class 文件里的参数名认出 `path`。参数名一丢，这个构造器既不是 delegating 也不是 property-based，worker 反序列化 plan fragment 里的列句柄就直接失败——列句柄是 coordinator 发给 worker 的，所以任何一次读 ES 数据的查询都会挂。
+
+症状很绕：ES 本身完全正常，报错却指向 coordinator 拉任务状态拿到了非 JSON 响应。
+
+```text
+Query failed: Unexpected response from https://<node>:8443/v1/task/<queryId>.0.0.0?summarize
+Caused by: Cannot construct instance of `io.trino.plugin.elasticsearch.decoders.VarcharDecoder$Descriptor`
+           (although at least one Creator exists): cannot deserialize from Object value
+           (no delegate- or property-based Creator)
+           ... through reference chain: TaskUpdateRequest["fragment"] -> ... -> ElasticsearchColumnHandle["decoderDescriptor"]
+```
+
+验证（必须打印出参数名 `path`）：
+
+```bash
+javap -v -p -cp build/libs/fs-trino-483.jar 'io.trino.plugin.elasticsearch.decoders.VarcharDecoder$Descriptor' | grep -A3 MethodParameters
+```
+
+我们自己写的 `http` 连接器不受影响：它的 `@JsonCreator` 参数都标了 `@JsonProperty`，所以这个坑只会以"只有 ES 查询失败"的形式出现。
+
 ## 与官方一致的部分（没有改）
 
 配置项（`elasticsearch.*` 全部属性）、隐藏列 `_id` / `_source` / `_score`、类型映射、谓词下推、按 shard 并行读、`count(*)` 走 count API、`raw_query` 表函数、`nodes` 系统表、`_meta.trino` 的 `isArray` / `asRawJson`、认证方式（`PASSWORD` / `AWS` / keystore / truststore）。
@@ -66,6 +97,6 @@ git diff --stat <上一次同步上游的 commit> -- src/main/java/io/trino/plug
 
 1. 取新 tag 的官方源码，覆盖 `src/main/java/io/trino/plugin/elasticsearch/`（保留本仓库新增的 `FsElasticsearchConnectorFactory` / `FsElasticsearchPlugin`，以及 4 处 `PATCH(fs-trino)`）。源码可整份 clone 到本地，也可以按文件从 `https://raw.githubusercontent.com/trinodb/trino/<tag>/plugin/trino-elasticsearch/src/main/java/io/trino/plugin/elasticsearch/<相对路径>` 取。
 2. 对照上面的补丁清单，确认 4 处的上下文没有漂移（官方若重构过 `parseType` / `ScanQueryPageSource`，补丁要跟着改）。
-3. 同步 `build.gradle` 里 ES rest-client、AWS SDK、airlift 的版本——新 tag 的 `plugin/trino-elasticsearch/pom.xml` 里锁着这些版本号。
+3. 同步 `build.gradle` 里 ES rest-client、AWS SDK、airlift 的版本——新 tag 的 `plugin/trino-elasticsearch/pom.xml` 里锁着这些版本号。顺带确认 `compileJava` 的 `-parameters` 还在（见上方"编译参数"一节），新 tag 里的 descriptor 大概率还是同样的写法。
 4. 重新生成校验清单：`docs/vendored-elasticsearch.sha256`（换 tag 后 sha256 全变），生成方式见文件头注释。
 5. 跑验收：`gradle clean build`，再按 README 的验收 SQL 在本地 Trino 上过一遍（重点跑 keyword 子字段列的查询与 `DESCRIBE`）。

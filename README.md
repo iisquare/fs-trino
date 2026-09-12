@@ -110,6 +110,17 @@ GRADLE_USER_HOME=/tmp/gradle-home \
 - `build/libs/fs-trino-483.jar`：插件 jar，含 `fs_http` 与 vendored 的官方 elasticsearch 实现（+4 处补丁）及两个插件入口。
 - `build/fs-trino-483.zip`：Trino 插件部署包，含插件 jar 及运行期依赖（Elasticsearch rest-client、AWS SDK、guava、guice、airlift 等），解到插件目录即可用。
 
+编译参数**不要删**：`build.gradle` 里 `compileJava` 带 `-parameters`，和官方 Maven 构建一致。SPI 里大量 `@JsonCreator` 构造器的参数上没有 `@JsonProperty`（例如 `VarcharDecoder.Descriptor(String path)`），Jackson 只能靠 class 文件里的参数名反序列化；少了它，coordinator 发出去的列句柄在 worker 侧构造不出来，查询会以完全不相干的现象失败：
+
+```text
+Query failed: Unexpected response from https://<node>:8443/v1/task/<queryId>.0.0.0?summarize
+Caused by: Cannot construct instance of `io.trino.plugin.elasticsearch.decoders.VarcharDecoder$Descriptor`
+           (although at least one Creator exists): cannot deserialize from Object value
+           (no delegate- or property-based Creator)
+```
+
+排查手段：`javap -v -p -cp build/libs/fs-trino-483.jar 'io.trino.plugin.elasticsearch.decoders.VarcharDecoder$Descriptor' | grep -A3 MethodParameters`，应当打印出参数名 `path`。
+
 ## 部署 Trino 插件
 
 1. 确保已经构建出插件包：
