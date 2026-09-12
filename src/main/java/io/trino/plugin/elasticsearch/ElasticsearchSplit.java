@@ -13,100 +13,45 @@
  */
 package io.trino.plugin.elasticsearch;
 
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
+import io.airlift.slice.SizeOf;
 import io.trino.spi.HostAddress;
 import io.trino.spi.connector.ConnectorSplit;
 
-import java.net.URI;
 import java.util.List;
-import java.util.Objects;
+import java.util.Optional;
 
 import static io.airlift.slice.SizeOf.estimatedSizeOf;
 import static io.airlift.slice.SizeOf.instanceSize;
+import static io.airlift.slice.SizeOf.sizeOf;
 import static java.util.Objects.requireNonNull;
 
-public final class ElasticsearchSplit
+public record ElasticsearchSplit(
+        String index,
+        int shard,
+        Optional<String> address)
         implements ConnectorSplit
 {
     private static final int INSTANCE_SIZE = instanceSize(ElasticsearchSplit.class);
 
-    private final String schemaName;
-    private final String indexName;
-    private final URI uri;
-    private final List<HostAddress> addresses;
-
-    @JsonCreator
-    public ElasticsearchSplit(
-            @JsonProperty("schemaName") String schemaName,
-            @JsonProperty("indexName") String indexName,
-            @JsonProperty("uri") URI uri)
+    public ElasticsearchSplit
     {
-        this.schemaName = requireNonNull(schemaName, "schemaName is null");
-        this.indexName = requireNonNull(indexName, "indexName is null");
-        this.uri = requireNonNull(uri, "uri is null");
-        this.addresses = ImmutableList.of(HostAddress.fromUri(uri));
-    }
-
-    @JsonProperty
-    public String getSchemaName()
-    {
-        return schemaName;
-    }
-
-    @JsonProperty
-    public String getIndexName()
-    {
-        return indexName;
-    }
-
-    @JsonProperty
-    public URI getUri()
-    {
-        return uri;
-    }
-
-    @Override
-    public boolean isRemotelyAccessible()
-    {
-        return true;
+        requireNonNull(index, "index is null");
+        requireNonNull(address, "address is null");
     }
 
     @Override
     public List<HostAddress> getAddresses()
     {
-        return addresses;
+        return address.map(host -> ImmutableList.of(HostAddress.fromString(host)))
+                .orElseGet(ImmutableList::of);
     }
 
     @Override
     public long getRetainedSizeInBytes()
     {
         return INSTANCE_SIZE
-                + estimatedSizeOf(schemaName)
-                + estimatedSizeOf(indexName)
-                + estimatedSizeOf(uri.toString())
-                + estimatedSizeOf(addresses, HostAddress::getRetainedSizeInBytes);
-    }
-
-    @Override
-    public boolean equals(Object o)
-    {
-        if (this == o) {
-            return true;
-        }
-        if (o == null || getClass() != o.getClass()) {
-            return false;
-        }
-        ElasticsearchSplit that = (ElasticsearchSplit) o;
-        return schemaName.equals(that.schemaName) &&
-                indexName.equals(that.indexName) &&
-                uri.equals(that.uri);
-    }
-
-    @Override
-    public int hashCode()
-    {
-        return Objects.hash(schemaName, indexName, uri);
+                + estimatedSizeOf(index)
+                + sizeOf(address, SizeOf::estimatedSizeOf);
     }
 }

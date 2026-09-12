@@ -14,150 +14,345 @@
 package io.trino.plugin.elasticsearch;
 
 import io.airlift.configuration.Config;
+import io.airlift.configuration.ConfigDescription;
+import io.airlift.configuration.ConfigSecuritySensitive;
+import io.airlift.configuration.DefunctConfig;
+import io.airlift.configuration.validation.FileExists;
+import io.airlift.units.Duration;
+import io.airlift.units.MinDuration;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 
-import java.net.URI;
+import java.io.File;
+import java.util.List;
+import java.util.Optional;
 
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.MINUTES;
+import static java.util.concurrent.TimeUnit.SECONDS;
+
+@DefunctConfig({
+        "elasticsearch.max-hits",
+        "elasticsearch.cluster-name",
+        "searchguard.ssl.certificate-format",
+        "searchguard.ssl.pemcert-filepath",
+        "searchguard.ssl.pemkey-filepath",
+        "searchguard.ssl.pemkey-password",
+        "searchguard.ssl.pemtrustedcas-filepath",
+        "searchguard.ssl.keystore-filepath",
+        "searchguard.ssl.keystore-password",
+        "searchguard.ssl.truststore-filepath",
+        "searchguard.ssl.truststore-password",
+        "elasticsearch.table-description-directory",
+        "elasticsearch.max-request-retries",
+        "elasticsearch.max-request-retry-time",
+})
 public class ElasticsearchConfig
 {
-    private URI elasticsearchUri;
-    private String username = "";
-    private String password = "";
-    private boolean tlsVerify = true;
-    private String defaultSchemaName = "es";
-    private int pageSize = 500;
-    private int connectTimeoutSeconds = 10;
-    private int requestTimeoutSeconds = 60;
-    private int metadataCacheTtlSeconds = 60;
-    private int pitKeepAliveSeconds = 60;
-
-    @NotNull
-    public URI getElasticsearchUri()
+    public enum Security
     {
-        return elasticsearchUri;
+        AWS,
+        PASSWORD,
     }
 
-    @Config("elasticsearch.uri")
-    public ElasticsearchConfig setElasticsearchUri(URI elasticsearchUri)
+    private List<String> hosts;
+    private int port = 9200;
+    private String defaultSchema = "default";
+    private int scrollSize = 1_000;
+    private Duration scrollTimeout = new Duration(1, MINUTES);
+    private Duration requestTimeout = new Duration(10, SECONDS);
+    private Duration connectTimeout = new Duration(1, SECONDS);
+    private Duration backoffInitDelay = new Duration(500, MILLISECONDS);
+    private Duration backoffMaxDelay = new Duration(20, SECONDS);
+    private Duration maxRetryTime = new Duration(30, SECONDS);
+    private Duration nodeRefreshInterval = new Duration(1, MINUTES);
+    private int maxHttpConnections = 25;
+    private int httpThreadCount = Runtime.getRuntime().availableProcessors();
+
+    private boolean tlsEnabled;
+    private File keystorePath;
+    private File trustStorePath;
+    private String keystorePassword;
+    private String truststorePassword;
+    private boolean ignorePublishAddress;
+    private boolean verifyHostnames = true;
+
+    private Security security;
+
+    @NotNull
+    public List<String> getHosts()
     {
-        this.elasticsearchUri = elasticsearchUri;
+        return hosts;
+    }
+
+    @Config("elasticsearch.host")
+    public ElasticsearchConfig setHosts(List<String> hosts)
+    {
+        this.hosts = hosts;
+        return this;
+    }
+
+    public int getPort()
+    {
+        return port;
+    }
+
+    @Config("elasticsearch.port")
+    public ElasticsearchConfig setPort(int port)
+    {
+        this.port = port;
         return this;
     }
 
     @NotNull
-    public String getUsername()
+    public String getDefaultSchema()
     {
-        return username;
-    }
-
-    @Config("elasticsearch.username")
-    public ElasticsearchConfig setUsername(String username)
-    {
-        this.username = username;
-        return this;
-    }
-
-    @NotNull
-    public String getPassword()
-    {
-        return password;
-    }
-
-    @Config("elasticsearch.password")
-    public ElasticsearchConfig setPassword(String password)
-    {
-        this.password = password;
-        return this;
-    }
-
-    public boolean isTlsVerify()
-    {
-        return tlsVerify;
-    }
-
-    @Config("elasticsearch.tls.verify")
-    public ElasticsearchConfig setTlsVerify(boolean tlsVerify)
-    {
-        this.tlsVerify = tlsVerify;
-        return this;
-    }
-
-    @NotNull
-    public String getDefaultSchemaName()
-    {
-        return defaultSchemaName;
+        return defaultSchema;
     }
 
     @Config("elasticsearch.default-schema-name")
-    public ElasticsearchConfig setDefaultSchemaName(String defaultSchemaName)
+    @ConfigDescription("Default schema name to use")
+    public ElasticsearchConfig setDefaultSchema(String defaultSchema)
     {
-        this.defaultSchemaName = defaultSchemaName;
+        this.defaultSchema = defaultSchema;
         return this;
     }
 
     @Min(1)
-    public int getPageSize()
+    public int getScrollSize()
     {
-        return pageSize;
+        return scrollSize;
     }
 
-    @Config("elasticsearch.page-size")
-    public ElasticsearchConfig setPageSize(int pageSize)
+    @Config("elasticsearch.scroll-size")
+    @ConfigDescription("Scroll batch size")
+    public ElasticsearchConfig setScrollSize(int scrollSize)
     {
-        this.pageSize = pageSize;
+        this.scrollSize = scrollSize;
         return this;
     }
 
-    @Min(1)
-    public int getConnectTimeoutSeconds()
+    @NotNull
+    public Duration getScrollTimeout()
     {
-        return connectTimeoutSeconds;
+        return scrollTimeout;
     }
 
-    @Config("elasticsearch.connect-timeout-seconds")
-    public ElasticsearchConfig setConnectTimeoutSeconds(int connectTimeoutSeconds)
+    @Config("elasticsearch.scroll-timeout")
+    @ConfigDescription("Scroll timeout")
+    public ElasticsearchConfig setScrollTimeout(Duration scrollTimeout)
     {
-        this.connectTimeoutSeconds = connectTimeoutSeconds;
+        this.scrollTimeout = scrollTimeout;
         return this;
     }
 
-    @Min(1)
-    public int getRequestTimeoutSeconds()
+    @NotNull
+    public Duration getRequestTimeout()
     {
-        return requestTimeoutSeconds;
+        return requestTimeout;
     }
 
-    @Config("elasticsearch.request-timeout-seconds")
-    public ElasticsearchConfig setRequestTimeoutSeconds(int requestTimeoutSeconds)
+    @Config("elasticsearch.request-timeout")
+    @ConfigDescription("Elasticsearch request timeout")
+    public ElasticsearchConfig setRequestTimeout(Duration requestTimeout)
     {
-        this.requestTimeoutSeconds = requestTimeoutSeconds;
+        this.requestTimeout = requestTimeout;
         return this;
     }
 
-    @Min(0)
-    public int getMetadataCacheTtlSeconds()
+    @NotNull
+    public Duration getConnectTimeout()
     {
-        return metadataCacheTtlSeconds;
+        return connectTimeout;
     }
 
-    @Config("elasticsearch.metadata-cache-ttl-seconds")
-    public ElasticsearchConfig setMetadataCacheTtlSeconds(int metadataCacheTtlSeconds)
+    @Config("elasticsearch.connect-timeout")
+    @ConfigDescription("Elasticsearch connect timeout")
+    public ElasticsearchConfig setConnectTimeout(Duration timeout)
     {
-        this.metadataCacheTtlSeconds = metadataCacheTtlSeconds;
+        this.connectTimeout = timeout;
         return this;
     }
 
-    @Min(1)
-    public int getPitKeepAliveSeconds()
+    @NotNull
+    public Duration getBackoffInitDelay()
     {
-        return pitKeepAliveSeconds;
+        return backoffInitDelay;
     }
 
-    @Config("elasticsearch.pit-keep-alive-seconds")
-    public ElasticsearchConfig setPitKeepAliveSeconds(int pitKeepAliveSeconds)
+    @Config("elasticsearch.backoff-init-delay")
+    @ConfigDescription("Initial delay to wait between backpressure retries")
+    public ElasticsearchConfig setBackoffInitDelay(Duration backoffInitDelay)
     {
-        this.pitKeepAliveSeconds = pitKeepAliveSeconds;
+        this.backoffInitDelay = backoffInitDelay;
+        return this;
+    }
+
+    @NotNull
+    public Duration getBackoffMaxDelay()
+    {
+        return backoffMaxDelay;
+    }
+
+    @Config("elasticsearch.backoff-max-delay")
+    @ConfigDescription("Maximum delay to wait between backpressure retries")
+    public ElasticsearchConfig setBackoffMaxDelay(Duration backoffMaxDelay)
+    {
+        this.backoffMaxDelay = backoffMaxDelay;
+        return this;
+    }
+
+    @NotNull
+    public Duration getMaxRetryTime()
+    {
+        return maxRetryTime;
+    }
+
+    @Config("elasticsearch.max-retry-time")
+    @ConfigDescription("Maximum timeout in case of multiple retries")
+    public ElasticsearchConfig setMaxRetryTime(Duration maxRetryTime)
+    {
+        this.maxRetryTime = maxRetryTime;
+        return this;
+    }
+
+    @NotNull
+    @MinDuration("1ms")
+    public Duration getNodeRefreshInterval()
+    {
+        return nodeRefreshInterval;
+    }
+
+    @Config("elasticsearch.node-refresh-interval")
+    @ConfigDescription("How often to refresh the list of available Elasticsearch nodes")
+    public ElasticsearchConfig setNodeRefreshInterval(Duration nodeRefreshInterval)
+    {
+        this.nodeRefreshInterval = nodeRefreshInterval;
+        return this;
+    }
+
+    @Config("elasticsearch.max-http-connections")
+    @ConfigDescription("Maximum number of persistent HTTP connections to Elasticsearch")
+    public ElasticsearchConfig setMaxHttpConnections(int size)
+    {
+        this.maxHttpConnections = size;
+        return this;
+    }
+
+    public int getMaxHttpConnections()
+    {
+        return maxHttpConnections;
+    }
+
+    @Config("elasticsearch.http-thread-count")
+    @ConfigDescription("Number of threads handling HTTP connections to Elasticsearch")
+    public ElasticsearchConfig setHttpThreadCount(int count)
+    {
+        this.httpThreadCount = count;
+        return this;
+    }
+
+    public int getHttpThreadCount()
+    {
+        return httpThreadCount;
+    }
+
+    public boolean isTlsEnabled()
+    {
+        return tlsEnabled;
+    }
+
+    @Config("elasticsearch.tls.enabled")
+    public ElasticsearchConfig setTlsEnabled(boolean tlsEnabled)
+    {
+        this.tlsEnabled = tlsEnabled;
+        return this;
+    }
+
+    public Optional<@FileExists File> getKeystorePath()
+    {
+        return Optional.ofNullable(keystorePath);
+    }
+
+    @Config("elasticsearch.tls.keystore-path")
+    public ElasticsearchConfig setKeystorePath(File path)
+    {
+        this.keystorePath = path;
+        return this;
+    }
+
+    public Optional<String> getKeystorePassword()
+    {
+        return Optional.ofNullable(keystorePassword);
+    }
+
+    @Config("elasticsearch.tls.keystore-password")
+    @ConfigSecuritySensitive
+    public ElasticsearchConfig setKeystorePassword(String password)
+    {
+        this.keystorePassword = password;
+        return this;
+    }
+
+    public Optional<@FileExists File> getTrustStorePath()
+    {
+        return Optional.ofNullable(trustStorePath);
+    }
+
+    @Config("elasticsearch.tls.truststore-path")
+    public ElasticsearchConfig setTrustStorePath(File path)
+    {
+        this.trustStorePath = path;
+        return this;
+    }
+
+    public Optional<String> getTruststorePassword()
+    {
+        return Optional.ofNullable(truststorePassword);
+    }
+
+    @Config("elasticsearch.tls.truststore-password")
+    @ConfigSecuritySensitive
+    public ElasticsearchConfig setTruststorePassword(String password)
+    {
+        this.truststorePassword = password;
+        return this;
+    }
+
+    public boolean isVerifyHostnames()
+    {
+        return verifyHostnames;
+    }
+
+    @Config("elasticsearch.tls.verify-hostnames")
+    public ElasticsearchConfig setVerifyHostnames(boolean verify)
+    {
+        this.verifyHostnames = verify;
+        return this;
+    }
+
+    public boolean isIgnorePublishAddress()
+    {
+        return ignorePublishAddress;
+    }
+
+    @Config("elasticsearch.ignore-publish-address")
+    public ElasticsearchConfig setIgnorePublishAddress(boolean ignorePublishAddress)
+    {
+        this.ignorePublishAddress = ignorePublishAddress;
+        return this;
+    }
+
+    @NotNull
+    public Optional<Security> getSecurity()
+    {
+        return Optional.ofNullable(security);
+    }
+
+    @Config("elasticsearch.security")
+    public ElasticsearchConfig setSecurity(Security security)
+    {
+        this.security = security;
         return this;
     }
 }

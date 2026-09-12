@@ -13,32 +13,24 @@
  */
 package io.trino.plugin.elasticsearch;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import io.trino.spi.Plugin;
 import io.trino.spi.connector.ConnectorFactory;
 
-import static java.util.Objects.requireNonNull;
-
-public class ElasticsearchPlugin
+/**
+ * 本插件的入口。只注册 {@code fs_elasticsearch} 一个连接器。
+ * <p>
+ * 官方同名的 {@link ElasticsearchPlugin}（注册名 {@code elasticsearch}）随源码一起 vendor 进来，但**故意不在
+ * META-INF/services/io.trino.spi.Plugin 里注册**：Trino 镜像自带官方 elasticsearch 插件目录，两个目录注册同名
+ * 连接器会让 catalog 的 {@code connector.name=elasticsearch} 指向哪个实现变得不确定。需要官方连接器时用镜像里
+ * 那个目录（对拍时正好一个跑官方、一个跑我们的补丁版本）。
+ */
+public class FsElasticsearchPlugin
         implements Plugin
 {
-    private final ConnectorFactory connectorFactory;
-
-    public ElasticsearchPlugin()
-    {
-        connectorFactory = new ElasticsearchConnectorFactory();
-    }
-
-    @VisibleForTesting
-    ElasticsearchPlugin(ElasticsearchConnectorFactory factory)
-    {
-        connectorFactory = requireNonNull(factory, "factory is null");
-    }
-
     @Override
-    public synchronized Iterable<ConnectorFactory> getConnectorFactories()
+    public Iterable<ConnectorFactory> getConnectorFactories()
     {
-        return ImmutableList.of(connectorFactory);
+        return ImmutableList.of(new FsElasticsearchConnectorFactory());
     }
 }

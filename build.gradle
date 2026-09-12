@@ -14,6 +14,9 @@ def airliftVersion = '439'
 def jacksonAnnotationsVersion = '2.22'
 def jacksonVersion = '2.22.1'
 def openTelemetryVersion = '1.64.0'
+// 官方 plugin/trino-elasticsearch/pom.xml（483 tag）里锁定的版本，仅取其中我们用到的坐标
+def elasticsearchVersion = '9.4.3'
+def awsSdkVersion = '2.47.4'
 
 dependencies {
     compileOnly "io.trino:trino-spi:${trinoVersion}"
@@ -24,14 +27,35 @@ dependencies {
 
     implementation "io.trino:trino-plugin-toolkit:${trinoVersion}"
     implementation "io.airlift:bootstrap:${airliftVersion}"
+    implementation "io.airlift:concurrent:${airliftVersion}"
     implementation "io.airlift:configuration:${airliftVersion}"
     implementation "io.airlift:json:${airliftVersion}"
+    implementation "io.airlift:log:${airliftVersion}"
+    implementation "io.airlift:stats:${airliftVersion}"
+    implementation "io.airlift:units:1.13"
     implementation "com.google.guava:guava:33.6.0-jre"
     implementation "com.google.inject:guice:7.0.0"
+    implementation "jakarta.annotation:jakarta.annotation-api:3.0.0"
     implementation "jakarta.validation:jakarta.validation-api:3.1.1"
+    implementation "org.weakref:jmxutils:1.21"
     implementation("com.fasterxml.jackson.core:jackson-databind:${jacksonVersion}") {
         exclude group: 'com.fasterxml.jackson.core', module: 'jackson-annotations'
     }
+
+    // 官方 elasticsearch 连接器的依赖（vendor 的官方源码直接用到）
+    implementation "dev.failsafe:failsafe:3.3.2"
+    implementation "org.elasticsearch.client:elasticsearch-rest-client:${elasticsearchVersion}"
+    implementation "org.apache.httpcomponents:httpasyncclient:4.1.5"
+    implementation "org.apache.httpcomponents:httpclient:4.5.14"
+    implementation "org.apache.httpcomponents:httpcore:4.4.16"
+    implementation "org.apache.httpcomponents:httpcore-nio:4.4.16"
+    implementation "software.amazon.awssdk:auth:${awsSdkVersion}"
+    implementation "software.amazon.awssdk:aws-core:${awsSdkVersion}"
+    implementation "software.amazon.awssdk:http-auth-aws:${awsSdkVersion}"
+    implementation "software.amazon.awssdk:http-client-spi:${awsSdkVersion}"
+    implementation "software.amazon.awssdk:regions:${awsSdkVersion}"
+    implementation "software.amazon.awssdk:sdk-core:${awsSdkVersion}"
+    implementation "software.amazon.awssdk:sts:${awsSdkVersion}"
 }
 
 configurations.runtimeClasspath {

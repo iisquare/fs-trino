@@ -13,69 +13,96 @@
  */
 package io.trino.plugin.elasticsearch;
 
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
+import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ConnectorTableHandle;
-import io.trino.spi.connector.SchemaTableName;
+import io.trino.spi.predicate.TupleDomain;
 
-import java.util.Objects;
+import java.util.Map;
+import java.util.Optional;
+import java.util.OptionalLong;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import static java.util.Objects.requireNonNull;
 
-public final class ElasticsearchTableHandle
+public record ElasticsearchTableHandle(
+        Type type,
+        String schema,
+        String index,
+        TupleDomain<ColumnHandle> constraint,
+        Map<String, String> regexes,
+        Optional<String> query,
+        OptionalLong limit,
+        Set<ElasticsearchColumnHandle> columns)
         implements ConnectorTableHandle
 {
-    private final String schemaName;
-    private final String indexName;
-
-    @JsonCreator
-    public ElasticsearchTableHandle(
-            @JsonProperty("schemaName") String schemaName,
-            @JsonProperty("indexName") String indexName)
+    public enum Type
     {
-        this.schemaName = requireNonNull(schemaName, "schemaName is null");
-        this.indexName = requireNonNull(indexName, "indexName is null");
+        SCAN, QUERY
     }
 
-    @JsonProperty
-    public String getSchemaName()
+    public ElasticsearchTableHandle(Type type, String schema, String index, Optional<String> query)
     {
-        return schemaName;
+        this(type,
+                schema,
+                index,
+                TupleDomain.all(),
+                ImmutableMap.of(),
+                query,
+                OptionalLong.empty(),
+                ImmutableSet.of());
     }
 
-    @JsonProperty
-    public String getIndexName()
+    public ElasticsearchTableHandle withColumns(Set<ElasticsearchColumnHandle> columns)
     {
-        return indexName;
+        return new ElasticsearchTableHandle(
+                type,
+                schema,
+                index,
+                constraint,
+                regexes,
+                query,
+                limit,
+                columns);
     }
 
-    public SchemaTableName toSchemaTableName()
+    public ElasticsearchTableHandle
     {
-        return new SchemaTableName(schemaName, indexName);
-    }
-
-    @Override
-    public boolean equals(Object o)
-    {
-        if (this == o) {
-            return true;
-        }
-        if (o == null || getClass() != o.getClass()) {
-            return false;
-        }
-        ElasticsearchTableHandle that = (ElasticsearchTableHandle) o;
-        return schemaName.equals(that.schemaName) && indexName.equals(that.indexName);
-    }
-
-    @Override
-    public int hashCode()
-    {
-        return Objects.hash(schemaName, indexName);
+        requireNonNull(type, "type is null");
+        requireNonNull(schema, "schema is null");
+        requireNonNull(index, "index is null");
+        requireNonNull(constraint, "constraint is null");
+        regexes = ImmutableMap.copyOf(regexes);
+        columns = ImmutableSet.copyOf(columns);
+        requireNonNull(query, "query is null");
+        requireNonNull(limit, "limit is null");
     }
 
     @Override
     public String toString()
     {
-        return schemaName + ":" + indexName;
+        StringBuilder builder = new StringBuilder();
+        builder.append(type + ":" + index);
+
+        StringBuilder attributes = new StringBuilder();
+        if (!regexes.isEmpty()) {
+            attributes.append("regexes=[");
+            attributes.append(regexes.entrySet().stream()
+                    .map(regex -> regex.getKey() + ":" + regex.getValue())
+                    .collect(Collectors.joining(", ")));
+            attributes.append("]");
+        }
+        limit.ifPresent(value -> attributes.append("limit=" + value));
+        query.ifPresent(value -> attributes.append("query" + value));
+
+        if (attributes.length() > 0) {
+            builder.append("(");
+            builder.append(attributes);
+            builder.append(")");
+        }
+
+        return builder.toString();
     }
 }

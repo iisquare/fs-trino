@@ -13,109 +13,42 @@
  */
 package io.trino.plugin.elasticsearch;
 
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.google.common.base.Joiner;
+import com.google.common.collect.ImmutableList;
+import io.trino.plugin.elasticsearch.client.IndexMetadata;
 import io.trino.spi.connector.ColumnHandle;
-import io.trino.spi.connector.ColumnMetadata;
 import io.trino.spi.type.Type;
 
-import java.util.Objects;
+import java.util.List;
 
 import static java.util.Objects.requireNonNull;
 
-public final class ElasticsearchColumnHandle
+public record ElasticsearchColumnHandle(
+        List<String> path,
+        Type type,
+        IndexMetadata.Type elasticsearchType,
+        DecoderDescriptor decoderDescriptor,
+        boolean supportsPredicates)
         implements ColumnHandle
 {
-    private final String columnName;
-    private final Type columnType;
-    private final String esFieldType;
-    private final ElasticsearchColumnSource columnSource;
-    private final boolean hidden;
-    private final int ordinalPosition;
-
-    @JsonCreator
-    public ElasticsearchColumnHandle(
-            @JsonProperty("columnName") String columnName,
-            @JsonProperty("columnType") Type columnType,
-            @JsonProperty("esFieldType") String esFieldType,
-            @JsonProperty("columnSource") ElasticsearchColumnSource columnSource,
-            @JsonProperty("hidden") boolean hidden,
-            @JsonProperty("ordinalPosition") int ordinalPosition)
+    public ElasticsearchColumnHandle
     {
-        this.columnName = requireNonNull(columnName, "columnName is null");
-        this.columnType = requireNonNull(columnType, "columnType is null");
-        this.esFieldType = requireNonNull(esFieldType, "esFieldType is null");
-        this.columnSource = requireNonNull(columnSource, "columnSource is null");
-        this.hidden = hidden;
-        this.ordinalPosition = ordinalPosition;
+        path = ImmutableList.copyOf(path);
+        requireNonNull(type, "type is null");
+        requireNonNull(elasticsearchType, "elasticsearchType is null");
+        requireNonNull(decoderDescriptor, "decoderDescriptor is null");
     }
 
-    @JsonProperty
-    public String getColumnName()
+    @JsonIgnore
+    public String name()
     {
-        return columnName;
-    }
-
-    @JsonProperty
-    public Type getColumnType()
-    {
-        return columnType;
-    }
-
-    @JsonProperty
-    public String getEsFieldType()
-    {
-        return esFieldType;
-    }
-
-    @JsonProperty
-    public ElasticsearchColumnSource getColumnSource()
-    {
-        return columnSource;
-    }
-
-    @JsonProperty
-    public boolean isHidden()
-    {
-        return hidden;
-    }
-
-    @JsonProperty
-    public int getOrdinalPosition()
-    {
-        return ordinalPosition;
-    }
-
-    public ColumnMetadata getColumnMetadata()
-    {
-        return ColumnMetadata.builder()
-                .setName(columnName)
-                .setType(columnType)
-                .setHidden(hidden)
-                .build();
+        return Joiner.on('.').join(path);
     }
 
     @Override
-    public boolean equals(Object o)
+    public String toString()
     {
-        if (this == o) {
-            return true;
-        }
-        if (o == null || getClass() != o.getClass()) {
-            return false;
-        }
-        ElasticsearchColumnHandle that = (ElasticsearchColumnHandle) o;
-        return hidden == that.hidden &&
-                ordinalPosition == that.ordinalPosition &&
-                columnName.equals(that.columnName) &&
-                columnType.equals(that.columnType) &&
-                esFieldType.equals(that.esFieldType) &&
-                columnSource == that.columnSource;
-    }
-
-    @Override
-    public int hashCode()
-    {
-        return Objects.hash(columnName, columnType, esFieldType, columnSource, hidden, ordinalPosition);
+        return name() + "::" + type();
     }
 }

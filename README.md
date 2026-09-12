@@ -19,8 +19,84 @@
 - `src/main/resources/META-INF/services/io.trino.spi.Plugin`：插件 SPI 入口。
 - `build.gradle`：插件构建配置。
 - `settings.gradle`：Gradle 项目配置，`rootProject.name = 'fs-trino'`。
+- `docs/vendored-elasticsearch.md`：vendored 官方源码的补丁清单、与上游同步的步骤。
+- `docs/vendored-elasticsearch.sha256`：未改动的官方文件校验值，`sha256sum -c` 可校验。
+- `libs/official-es`：**可选**，从官方镜像抽出的官方 `elasticsearch` 连接器 jar，只用于与官方对拍，不参与构建（已在 `.gitignore` 中忽略）。
+
+## fs_elasticsearch 的实现方式：vendored 官方源码
+
+`fs_elasticsearch` **不是另写一套实现**：官方 483 tag 的 `plugin/trino-elasticsearch` 源码原样收在本仓库里，只在 keyword 子字段（multi-field）这部分打了 4 处补丁。官方功能、配置项、隐藏列、类型映射、谓词下推全部保持原样。
+
+- 官方源码 52 个文件 + 本仓库新增 2 个（`FsElasticsearchConnectorFactory`、`FsElasticsearchPlugin`），都在 `src/main/java/io/trino/plugin/elasticsearch/`。
+- 与上游不一致的只有 4 个文件，每处都有 `// PATCH(fs-trino)` 注释：`grep -rn 'PATCH(fs-trino)' src/main/java` 一次看全。
+- 48 个未改动文件与上游逐字节一致：`sha256sum -c docs/vendored-elasticsearch.sha256`。
+- 补丁内容、升级上游的步骤见 [docs/vendored-elasticsearch.md](docs/vendored-elasticsearch.md)。
+
+**构建不需要 docker、也不需要官方镜像**：全部依赖来自 Maven Central，版本按官方 483 的 `pom.xml` 锁定（见 `build.gradle`）。
+
+为什么用 vendored 源码而不是官方发布的 jar：483 的 `io.trino:trino-elasticsearch` 没有发布到 Maven Central（该坐标只到 476，可对比 <https://repo1.maven.org/maven2/io/trino/trino-elasticsearch/>），拿不到编译产物；而且 vendored 之后补丁类和官方类同包、同 classloader，能直接用包私有成员，补丁面才压得住（见 `docs/vendored-elasticsearch.md`）。
+
+### 与官方镜像对拍（可选）
+
+只有需要**和镜像里的官方连接器做 A/B 对比**时才用这一节，构建不需要它。
+
+镜像 fs-docker 里已经在用（它的 trino 服务就是 `FROM trinodb/trino:${TRINO_VERSION}`），正常情况下本机已有：
+
+```bash
+docker images trinodb/trino:483     # 没有的话先 docker pull trinodb/trino:483
+```
+
+复制整个插件目录（`docker create` + `docker cp` 在 Git Bash / WSL / macOS / Linux 下都可用）：
+
+```bash
+docker create --name trino483 trinodb/trino:483
+rm -rf libs/official-es
+mkdir -p libs/official-es
+docker cp trino483:/usr/lib/trino/plugin/elasticsearch/. libs/official-es/
+docker rm trino483
+```
+
+一次性容器也可以（Git Bash 下要把宿主路径写成 `D:/...`，否则 MSYS 会把 `/d/...` 转换掉）：
+
+```bash
+docker run --rm -v "$(cygpath -m "$PWD")/libs:/out" trinodb/trino:483 \
+  sh -c 'cp -a /usr/lib/trino/plugin/elasticsearch/. /out/official-es/'
+```
+
+不想用 `docker cp` 也可以走任何能把镜像里 `/usr/lib/trino/plugin/elasticsearch` 取出来的办法（例如 `docker save` 后解层），最终 `libs/official-es/` 里是那一堆 jar 即可。
+
+### 校验抽取结果
+
+```bash
+ls libs/official-es | wc -l    # jar 数量（几十个：官方连接器本体 + 它的依赖）
+ls libs/official-es | head     # 应能看到 trino-elasticsearch-483.jar 以及各类依赖 jar
+```
+
+再确认连接器主 jar 和 SPI 入口都在（不关心具体是哪个 jar）：
+
+```bash
+for j in libs/official-es/*.jar; do
+  unzip -l "$j" | grep -q 'io/trino/plugin/elasticsearch/ElasticsearchMetadata.class' && echo "连接器主 jar: $j"
+done
+for j in libs/official-es/*.jar; do
+  unzip -p "$j" META-INF/services/io.trino.spi.Plugin 2>/dev/null | grep -q ElasticsearchPlugin && echo "SPI 入口: $j"
+done
+```
+
+两条 `echo` 都有输出就算抽取成功。把这一堆 jar 放进一个独立的插件目录（例如 `$TRINO_HOME/plugin/official-es/`），再配一个 `connector.name=elasticsearch` 的 catalog，就能和 `fs_es` 并排跑同一条 SQL 对比结果（`fs_es` 注册的是 `fs_elasticsearch`，两者互不冲突）。
+
+### 升级 Trino 版本时
+
+1. 按 [docs/vendored-elasticsearch.md](docs/vendored-elasticsearch.md) 同步官方源码、打回 4 处补丁、更新 `build.gradle` 里的依赖版本；
+2. 如果还要做对拍，`rm -rf libs/official-es` 并按本节重新抽取。
+
+### 许可
+
+vendored 的官方源码是 Apache License 2.0，文件头原样保留，编译进 `build/libs/fs-trino-483.jar` 一起分发。`build/fs-trino-483.zip` 里还会有 `runtimeClasspath` 上的第三方依赖 jar（guava、guice、airlift、Elasticsearch rest-client、AWS SDK 等），各自带自己的 `META-INF`，打包时不要剔除或改写。
 
 ## 构建
+
+前置条件：无。依赖全部来自 Maven Central，不需要 docker，也不需要 `libs/official-es/`。
 
 在 `fs-trino` 项目根目录执行：
 
@@ -31,8 +107,8 @@ GRADLE_USER_HOME=/tmp/gradle-home \
 
 构建产物：
 
-- `build/libs/fs-trino-483.jar`
-- `build/fs-trino-483.zip`：Trino 插件部署包
+- `build/libs/fs-trino-483.jar`：插件 jar，含 `fs_http` 与 vendored 的官方 elasticsearch 实现（+4 处补丁）及两个插件入口。
+- `build/fs-trino-483.zip`：Trino 插件部署包，含插件 jar 及运行期依赖（Elasticsearch rest-client、AWS SDK、guava、guice、airlift 等），解到插件目录即可用。
 
 ## 部署 Trino 插件
 
@@ -359,122 +435,17 @@ SELECT * FROM fs_bi.api.user_list LIMIT 10;
 
 # fs_elasticsearch 连接器
 
-`fs_elasticsearch` 由插件直连 Elasticsearch，通过 `GET /_mapping` 读取索引结构、通过 `POST /_search` 读取数据，不经过平台服务端。
+`fs_elasticsearch` 直连 Elasticsearch，用的是**官方 483 连接器的实现 + 4 处 keyword 子字段补丁**（见 [docs/vendored-elasticsearch.md](docs/vendored-elasticsearch.md)）。配置项、类型映射、隐藏列、谓词下推、`raw_query` 表函数、`nodes` 系统表都与官方 `elasticsearch` 连接器一致；与官方**唯一的差异**是：mapping 里 `fields` 下的 keyword 子字段会注册成独立列。
 
-每个 ES 索引对应一张表，全部归入一个可配置的 schema（默认 `es`）。索引的 mapping 字段全部注册为列，**`fields` 中的子字段（multi-field）也会注册为独立列**：`text` 类型字段 `name` 带有 `"fields": {"keyword": {"type": "keyword"}}` 时，会同时产生 `name` 和 `name.keyword` 两列。
+每个 ES 索引对应一张表，全部归入一个可配置的 schema（默认 `default`）。
+
+因为注册名不同（`fs_elasticsearch` vs 官方 `elasticsearch`），两个连接器可以在同一个 Trino 里并存、各配一个 catalog，方便对拍同一条 SQL。
 
 ## Elasticsearch catalog 配置
 
-```bash
-cat > "$TRINO_HOME/etc/catalog/fs_es.properties" <<'EOF'
-connector.name=fs_elasticsearch
-elasticsearch.uri=http://127.0.0.1:9200
-elasticsearch.username=elastic
-elasticsearch.password=admin888
-elasticsearch.default-schema-name=es
-EOF
-```
-
-| 配置 | 必填 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `elasticsearch.uri` | 是 | - | Elasticsearch 基础地址，例如 `http://127.0.0.1:9200` |
-| `elasticsearch.username` | 否 | 空 | Basic 认证用户名，为空时不发送认证头 |
-| `elasticsearch.password` | 否 | 空 | Basic 认证密码 |
-| `elasticsearch.tls.verify` | 否 | `true` | `false` 表示信任任意证书并跳过主机名校验，用于自签名证书 |
-| `elasticsearch.default-schema-name` | 否 | `es` | 所有索引作为表归入的 schema 名称 |
-| `elasticsearch.page-size` | 否 | `500` | 每次读取的最大行数 |
-| `elasticsearch.connect-timeout-seconds` | 否 | `10` | 连接超时秒数 |
-| `elasticsearch.request-timeout-seconds` | 否 | `60` | 请求超时秒数 |
-| `elasticsearch.metadata-cache-ttl-seconds` | 否 | `60` | 索引结构缓存秒数，0 表示永久缓存 |
-| `elasticsearch.pit-keep-alive-seconds` | 否 | `60` | point in time / scroll 的 keep alive，每页刷新 |
-
-## 索引结构与列
-
-- 索引即表；`.` 开头的系统索引（`.kibana`、`.security`、`.ds-*` 等）不注册为表。
-- 没有任何 mapped 字段的索引不注册为表。
-- 映射为 `object`、`nested`、`flattened`、`geo_point`、`geo_shape` 的字段是 `json` 类型列，可用 `json_extract` 等 JSON 函数处理。
-- 子字段（multi-field）永远是**独立列**，列名为 `父字段.子字段`，取子字段自己的类型。因为名字里带点号，在 SQL 中必须用双引号：
-
-```sql
-SHOW SCHEMAS FROM fs_es;
-SHOW TABLES FROM fs_es.es;
-DESCRIBE fs_es.es.demo_products;
-
-SELECT name, "name.keyword" FROM fs_es.es.demo_products LIMIT 10;
-SELECT name FROM fs_es.es.demo_products WHERE "name.keyword" = 'Alice';
-SELECT "name.keyword", COUNT(*) FROM fs_es.es.demo_products GROUP BY "name.keyword";
-```
-
-子字段的值不在 `_source` 中，插件通过 `_search` 的 `fields` 参数读取。`ignore_above` 等导致字段未索引时该列为 `NULL`；字段有多个值时只取第一个。
-
-每张表还有两个隐藏列。它们不出现在 `DESCRIBE` 和 `SELECT *` 的结果里，但可以按列名直接查询：
-
-| 列 | 类型 | 说明 |
-| --- | --- | --- |
-| `_id` | `varchar` | 文档 `_id`，用于去重、关联、增量定位 |
-| `_source` | `varchar` | 文档 `_source` 原文（JSON 字符串），可用 `json_extract` 解析，也能取到 mapping 里未注册的字段 |
-
-```sql
-SELECT _id, name FROM fs_es.es.demo_products LIMIT 10;
-SELECT json_extract("_source", '$.price') FROM fs_es.es.demo_products LIMIT 1;
-```
-
-这两个列名与官方 `elasticsearch` 连接器一致，便于在两者之间切换 SQL。官方还有 `_score` 列，本连接器不支持：读取时按文档顺序分页，没有相关性打分。
-
-## 类型映射
-
-| Elasticsearch 类型 | Trino 类型 |
-| --- | --- |
-| `keyword`、`text`、`wildcard`、`constant_keyword`、`match_only_text`、`search_as_you_type`、`ip` | `varchar` |
-| `long` | `bigint` |
-| `integer` | `integer` |
-| `short` | `smallint` |
-| `byte` | `tinyint` |
-| `double`、`scaled_float` | `double` |
-| `float`、`half_float` | `real` |
-| `unsigned_long` | `decimal(20, 0)` |
-| `boolean` | `boolean` |
-| `date` | `timestamp(3)` |
-| `date_nanos` | `timestamp(6)` |
-| `binary` | `varbinary` |
-| `object`、`nested`、`flattened`、`geo_point`、`geo_shape` | `json` |
-
-其他类型（`alias`、`join`、`percolator`、`completion`、`dense_vector` 等）不会注册为列，索引中其余字段仍可正常查询。
-
-日期字段：`_source` 中为 ISO 字符串时按时间解析，为数值时按 epoch 毫秒解析（`date_nanos` 按 epoch 纳秒）。
-
-## 读取与分页
-
-- 每个索引一个 split，读取时用 point in time (PIT) + `search_after` 分页，保证翻页期间数据视图稳定；不支持 PIT 的集群自动降级为 scroll。
-- 查询结束或提前终止（如 `LIMIT`）时释放 PIT/scroll；进程被强杀时由 Elasticsearch 按 keep alive 自动过期。
-- 没有谓词下推：`WHERE`、`ORDER BY`、`GROUP BY` 由 Trino 在读取到的数据之上完成，每次查询都是全量分页扫描，可通过 `elasticsearch.page-size` 权衡单页行数与请求次数。
-
-## 支持的 Elasticsearch 版本
-
-`fields` 搜索参数要求 Elasticsearch 7.10 及以上，因此支持范围为 7.10 - 8.x，6.x 及以下不支持。
-
-## 与官方 elasticsearch 连接器的差异
-
-Trino 自带 `elasticsearch` 连接器。本连接器不依赖官方连接器的任何代码，两者互不影响，可以同时启用（各自一个 catalog 文件）。
-
-| 能力 | `fs_elasticsearch` | 官方 `elasticsearch` |
-| --- | --- | --- |
-| multi-field 子字段作为独立列（`name.keyword`） | 支持 | 不支持（解析 mapping 时忽略 `fields`，值只从 `_source` 取） |
-| `_id`、`_source` 隐藏列 | 支持，列名与官方一致 | 支持 |
-| `_score` 隐藏列 | 不支持 | 支持 |
-| object / nested 字段 | `json` 列 | `ROW` 类型，可直接写 `attributes.color` |
-| 谓词下推 | 无 | keyword、数值、日期可下推为 ES 查询 |
-| 并行读取 | 每个索引 1 个 split | 按 shard 拆分 |
-| `count(*)` | 全量分页扫描 | 走 ES count API |
-| 数组字段 | 取第一个元素或按类型转换 | `elasticsearch.array-mapping` 配置 |
-| 认证与 TLS | Basic 认证、可跳过证书校验 | Basic / AWS / keystore、truststore |
-| 其他 | 无 | `raw_query` 表函数、`nodes` 系统表、`_meta.trino` 的 `isArray` / `asRawJson` |
-
-选择建议：需要子字段列时用 `fs_es`；只看重谓词下推或并行扫描时用官方 `elasticsearch`。官方连接器的 catalog 示例（属性名与官方 483 一致）：
-
 ```properties
-# $TRINO_HOME/etc/catalog/es.properties
-connector.name=elasticsearch
+# $TRINO_HOME/etc/catalog/fs_es.properties
+connector.name=fs_elasticsearch
 elasticsearch.host=127.0.0.1
 elasticsearch.port=9200
 elasticsearch.default-schema-name=default
@@ -483,10 +454,161 @@ elasticsearch.auth.user=elastic
 elasticsearch.auth.password=admin888
 ```
 
+| 配置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `elasticsearch.host` | 必填 | 主机名，多个用逗号分隔 |
+| `elasticsearch.port` | `9200` | 端口 |
+| `elasticsearch.default-schema-name` | `default` | 所有索引作为表归入的 schema |
+| `elasticsearch.security` | 无 | `PASSWORD`（Basic 认证）或 `AWS`（请求签名） |
+| `elasticsearch.auth.user` / `elasticsearch.auth.password` | 无 | `security=PASSWORD` 时使用 |
+| `elasticsearch.aws.access-key` / `aws.secret-key` / `aws.region` / `aws.iam-role` / `aws.external-id` | 无 | `security=AWS` 时使用 |
+| `elasticsearch.scroll-size` | `1000` | scroll 每批行数 |
+| `elasticsearch.scroll-timeout` | `1m` | scroll 上下文超时 |
+| `elasticsearch.request-timeout` | `10s` | 请求超时 |
+| `elasticsearch.connect-timeout` | `1s` | 连接超时 |
+| `elasticsearch.node-refresh-interval` | `1m` | 可用节点列表刷新间隔 |
+| `elasticsearch.max-http-connections` | `25` | HTTP 连接数上限 |
+| `elasticsearch.http-thread-count` | CPU 核数 | HTTP 线程数 |
+| `elasticsearch.backoff-init-delay` / `backoff-max-delay` / `max-retry-time` | `500ms` / `20s` / `30s` | 反压重试 |
+| `elasticsearch.tls.enabled` | `false` | 是否启用 TLS |
+| `elasticsearch.tls.keystore-path` / `tls.keystore-password` | 无 | 客户端证书 |
+| `elasticsearch.tls.truststore-path` / `tls.truststore-password` | 无 | 信任库 |
+| `elasticsearch.tls.verify-hostnames` | `true` | 是否校验主机名 |
+| `elasticsearch.ignore-publish-address` | `false` | ES 返回的 `publish_address` 从 Trino 节点不可达时置 `true` |
+
+属性名与官方 483 完全一致，官方文档见 <https://trino.io/docs/current/connector/elasticsearch.html>。**写错的属性名会让 Trino 启动直接报错**（airlift 会报 "Unknown property"），不会被静默忽略；已废弃的属性（如 `elasticsearch.max-hits`、`searchguard.*`）也被显式列出并报错，便于及早发现配置是从老版本搬过来的。
+
+## 索引结构与列
+
+- 索引即表，全部归入 `elasticsearch.default-schema-name` 指定的 schema。
+- 没有任何 mapped 字段的索引不注册为表。
+- mapping 里的字段全部注册为列；`object` / `nested` 映射成 Trino 的 `ROW` 类型，可以直接写 `attributes.color`。
+- **`fields` 下的 keyword 子字段注册为独立列**（本插件的补丁）：`text` 字段 `name` 带 `"fields": {"keyword": {"type": "keyword"}}` 时，会同时有 `name` 和 `name.keyword` 两列。列名就是子字段在 Elasticsearch 里的路径，因为带点号，SQL 里必须用双引号。
+- 只有 `type=keyword` 的子字段注册为列。text 等类型的子字段没有 doc value，取不到值，直接忽略——要把子字段当列用，子字段类型必须是 keyword。
+- 子字段列的 `isArray` 默认继承父字段：父字段是数组（`_meta.trino.<字段>.isArray=true`），它的 keyword 子字段列也是数组；需要单独控制时用 `_meta.trino["<父字段>.<子字段>"].isArray` 覆盖。
+
+```sql
+SHOW SCHEMAS FROM fs_es;
+SHOW TABLES FROM fs_es.default;
+DESCRIBE fs_es.default.demo_products;
+
+SELECT name, "name.keyword" FROM fs_es.default.demo_products LIMIT 10;
+SELECT name FROM fs_es.default.demo_products WHERE "name.keyword" = 'Alice';
+SELECT "name.keyword", COUNT(*) FROM fs_es.default.demo_products GROUP BY "name.keyword";
+```
+
+子字段的值不在 `_source` 里，插件通过 `_search` 的 `docvalue_fields` 取（这也是只支持 keyword 子字段的原因：keyword 一定有 doc value）。被 `ignore_above` 截断等导致没有值时该列为 `NULL`；标量列取第一个值，数组列给完整列表。
+
+### 数组列与 JSON 列（`_meta.trino`）
+
+数组要用官方约定的 `_meta.trino` 声明（兼容更老的 `_meta.presto`）：
+
+```json
+{
+  "mappings": {
+    "properties": {
+      "tags": {"type": "keyword"},
+      "attributes": {"type": "object"}
+    },
+    "_meta": {
+      "trino": {
+        "tags": {"isArray": true},
+        "attributes": {"asRawJson": true}
+      }
+    }
+  }
+}
+```
+
+- `isArray: true`：该字段按数组返回（`array(varchar)` 等）。
+- `asRawJson: true`：该列不展开成 `ROW`，直接返回 `_source` 里的 JSON 原文（`varchar`）。
+
+### 隐藏列
+
+三个隐藏列不出现在 `DESCRIBE` / `SELECT *` 里，但可以按列名直接查（与官方一致）：
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `_id` | `varchar` | 文档 `_id`，用于去重、关联、增量定位 |
+| `_source` | `varchar` | 文档 `_source` 原文（JSON 字符串），可用 `json_extract` 解析，也能取到 mapping 里未注册的字段 |
+| `_score` | `real` | 相关性得分，配合 `raw_query` 表函数用 |
+
+```sql
+SELECT _id, _score, name FROM fs_es.default.demo_products LIMIT 10;
+SELECT json_extract("_source", '$.price') FROM fs_es.default.demo_products LIMIT 1;
+```
+
+### 表函数与系统表
+
+```sql
+-- 直接用原生 ES 查询 DSL（第三个参数是查询体 JSON），列由 query 里指定的字段决定
+SELECT * FROM TABLE(fs_es.system.raw_query(
+  schema => 'default',
+  index => 'demo_products',
+  query => '{"query": {"match": {"name": "Alice"}}}'));
+
+-- ES 节点信息
+SELECT * FROM fs_es.system.nodes;
+```
+
+## 类型映射
+
+官方 483 的映射，补丁未改动：
+
+| Elasticsearch 类型 | Trino 类型 |
+| --- | --- |
+| `text`、`keyword` | `varchar` |
+| `long` | `bigint` |
+| `integer` | `integer` |
+| `short` | `smallint` |
+| `byte` | `tinyint` |
+| `double`、`scaled_float` | `double` |
+| `float` | `real` |
+| `boolean` | `boolean` |
+| `ip` | `ipaddress` |
+| `binary` | `varbinary` |
+| `date`（没有自定义 `format`） | `timestamp(3)` |
+| `object`、`nested` | `ROW(...)`（`_meta.trino.<字段>.asRawJson=true` 时改为 `varchar` 的 JSON 原文） |
+| `_meta.trino.<字段>.isArray=true` 的字段 | `array(...)` |
+| keyword 子字段（`父字段.keyword`） | `varchar`（本插件的补丁） |
+
+其余类型（`date` 带自定义 `format`、`alias`、`join`、`percolator`、`completion`、`dense_vector`、`flattened`、`date_nanos` 等）不注册为列，索引里其余字段照常可查。
+
+## 读取与分页
+
+- 每个分片一个 split，多分片并行读（用 `preference=_shards:N` 固定到分片）。
+- 每个分片用 scroll 分批取，批大小 `elasticsearch.scroll-size`、上下文超时 `elasticsearch.scroll-timeout`，读完释放。
+- 谓词下推：`=`、`IN`、范围、`LIKE` 分别翻译成 ES 的 `term`、`bool(should)`、`range`、`regexp` 查询，只对 keyword（含 keyword 子字段）、整型/浮点、`date`、`boolean` 列生效（`scaled_float` 列不下推）。
+- 投影下推：只取用到的列，普通列用 `_source.includes` 裁剪，keyword 子字段列用 `docvalue_fields` 取。
+- `count(*)` 走 ES 的 count API，不读文档。
+
+## 支持的 Elasticsearch 版本
+
+跟随官方 483 连接器：官方测试覆盖 7.x 与 8.x。本插件的补丁只用到了 `docvalue_fields`（ES 7 及以上都支持），没有额外的版本限制。
+
+## 与官方 elasticsearch 连接器的差异
+
+`fs_elasticsearch` 就是官方连接器（vendored 源码 + 4 处补丁），**唯一的差异**是：mapping 里 `fields` 下的 keyword 子字段会多出独立列（例如 `name.keyword`）。
+
+| | `fs_elasticsearch` | 官方 `elasticsearch` |
+| --- | --- | --- |
+| keyword 子字段作为独立列（`name.keyword`） | 支持 | 不支持（解析 mapping 时忽略 `fields`，值只从 `_source` 取） |
+| 其余全部能力（配置项、类型映射、隐藏列、谓词下推、并行读、`count(*)`、`raw_query`、`nodes`、`_meta.trino`、认证方式） | 相同 | 相同 |
+
+剩下的差别只有注册名：本插件注册成 `fs_elasticsearch`，镜像自带的官方连接器注册成 `elasticsearch`，因此同一个 Trino 里两个 catalog 可以并存，用同一条 SQL 对拍（官方那一份的 catalog 属性名、默认值与 `fs_es.properties` 完全一致）：
+
+```properties
+# $TRINO_HOME/etc/catalog/es.properties  —— 镜像自带的官方连接器
+connector.name=elasticsearch
+```
+
+> 官方的 `ElasticsearchPlugin` 也随源码 vendor 进来了，但**故意没有在 `META-INF/services/io.trino.spi.Plugin` 里注册**，避免和镜像自带的官方插件目录抢同名连接器。所以要跑官方那一份，用镜像里的插件目录，不要用我们这包。
+
 ## fs_elasticsearch 排查
 
-- `Elasticsearch request to ... failed with status 401`：检查 `elasticsearch.username` / `elasticsearch.password`。
-- `Elasticsearch request to ... failed with status 404`：索引已被删除或未刷新缓存，调整 `elasticsearch.metadata-cache-ttl-seconds` 或重启 Trino 节点。
-- 自签名证书报 SSL 错误：设置 `elasticsearch.tls.verify=false`。
-- 新增索引或新增字段后查询不到：调整 `elasticsearch.metadata-cache-ttl-seconds`，或重启 Trino 节点。
-- 子字段列为 `NULL`：确认该字段确实定义了 `fields` 子字段，且值未被 `ignore_above` 截断。
+- `Unknown property 'elasticsearch.xxx'`：属性名写错，或用了老版本的属性名（本插件与官方 483 的属性名完全一致）。
+- `Elasticsearch request to ... failed with status 401`：检查 `elasticsearch.security=PASSWORD` 与 `elasticsearch.auth.user` / `auth.password`。
+- `Elasticsearch request to ... failed with status 404`：索引被删除，或分片路由过期——节点列表默认每 1 分钟刷新（`elasticsearch.node-refresh-interval`）。
+- 自签名证书报 SSL 错误：配 `elasticsearch.tls.truststore-path` / `truststore-password`；仅测试环境可以 `elasticsearch.tls.verify-hostnames=false`。
+- 新增索引或字段后查不到：Trino 是按需读 mapping 的（没有长期缓存），先在 ES 侧确认 mapping 已生效，再重试。
+- 子字段列全是 `NULL`：确认该子字段的 `type` 是 `keyword`（其它类型的子字段不注册为列），且值没有被 `ignore_above` 截断。

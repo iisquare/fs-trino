@@ -14,53 +14,52 @@
 package io.trino.plugin.elasticsearch;
 
 import com.google.inject.Inject;
+import io.trino.plugin.elasticsearch.client.ElasticsearchClient;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ConnectorSession;
-import io.trino.spi.connector.ConnectorSplit;
 import io.trino.spi.connector.ConnectorSplitManager;
 import io.trino.spi.connector.ConnectorSplitSource;
 import io.trino.spi.connector.ConnectorTableHandle;
 import io.trino.spi.connector.ConnectorTransactionHandle;
 import io.trino.spi.connector.Constraint;
 import io.trino.spi.connector.FixedSplitSource;
-import io.trino.spi.connector.TableNotFoundException;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
+import static io.trino.plugin.elasticsearch.ElasticsearchTableHandle.Type.QUERY;
 import static java.util.Objects.requireNonNull;
 
-public final class ElasticsearchSplitManager
+public class ElasticsearchSplitManager
         implements ConnectorSplitManager
 {
     private final ElasticsearchClient client;
-    private final ElasticsearchConfig config;
 
     @Inject
-    public ElasticsearchSplitManager(ElasticsearchClient client, ElasticsearchConfig config)
+    public ElasticsearchSplitManager(ElasticsearchClient client)
     {
         this.client = requireNonNull(client, "client is null");
-        this.config = requireNonNull(config, "config is null");
     }
 
     @Override
     public ConnectorSplitSource getSplits(
             ConnectorTransactionHandle transaction,
             ConnectorSession session,
-            ConnectorTableHandle connectorTableHandle,
+            ConnectorTableHandle table,
             Set<ColumnHandle> dynamicFilterColumns,
             Constraint constraint)
     {
-        ElasticsearchTableHandle tableHandle = (ElasticsearchTableHandle) connectorTableHandle;
-        if (client.getTable(tableHandle.getIndexName()) == null) {
-            throw new TableNotFoundException(tableHandle.toSchemaTableName());
-        }
+        ElasticsearchTableHandle tableHandle = (ElasticsearchTableHandle) table;
 
-        List<ConnectorSplit> splits = List.of(
-                new ElasticsearchSplit(
-                        tableHandle.getSchemaName(),
-                        tableHandle.getIndexName(),
-                        config.getElasticsearchUri()));
+        if (tableHandle.type().equals(QUERY)) {
+            return new FixedSplitSource(new ElasticsearchSplit(tableHandle.index(), 0, Optional.empty()));
+        }
+        List<ElasticsearchSplit> splits = client.getSearchShards(tableHandle.index()).stream()
+                .map(shard -> new ElasticsearchSplit(shard.index(), shard.id(), shard.address()))
+                .collect(toImmutableList());
+
         return new FixedSplitSource(splits);
     }
 }
