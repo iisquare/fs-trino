@@ -29,7 +29,8 @@ public final class ElasticsearchColumnHandle
     private final String columnName;
     private final Type columnType;
     private final String esFieldType;
-    private final boolean fromSource;
+    private final ElasticsearchColumnSource columnSource;
+    private final boolean hidden;
     private final int ordinalPosition;
 
     @JsonCreator
@@ -37,13 +38,15 @@ public final class ElasticsearchColumnHandle
             @JsonProperty("columnName") String columnName,
             @JsonProperty("columnType") Type columnType,
             @JsonProperty("esFieldType") String esFieldType,
-            @JsonProperty("fromSource") boolean fromSource,
+            @JsonProperty("columnSource") ElasticsearchColumnSource columnSource,
+            @JsonProperty("hidden") boolean hidden,
             @JsonProperty("ordinalPosition") int ordinalPosition)
     {
         this.columnName = requireNonNull(columnName, "columnName is null");
         this.columnType = requireNonNull(columnType, "columnType is null");
         this.esFieldType = requireNonNull(esFieldType, "esFieldType is null");
-        this.fromSource = fromSource;
+        this.columnSource = requireNonNull(columnSource, "columnSource is null");
+        this.hidden = hidden;
         this.ordinalPosition = ordinalPosition;
     }
 
@@ -66,9 +69,15 @@ public final class ElasticsearchColumnHandle
     }
 
     @JsonProperty
-    public boolean isFromSource()
+    public ElasticsearchColumnSource getColumnSource()
     {
-        return fromSource;
+        return columnSource;
+    }
+
+    @JsonProperty
+    public boolean isHidden()
+    {
+        return hidden;
     }
 
     @JsonProperty
@@ -79,7 +88,11 @@ public final class ElasticsearchColumnHandle
 
     public ColumnMetadata getColumnMetadata()
     {
-        return new ColumnMetadata(columnName, columnType);
+        return ColumnMetadata.builder()
+                .setName(columnName)
+                .setType(columnType)
+                .setHidden(hidden)
+                .build();
     }
 
     @Override
@@ -92,16 +105,17 @@ public final class ElasticsearchColumnHandle
             return false;
         }
         ElasticsearchColumnHandle that = (ElasticsearchColumnHandle) o;
-        return fromSource == that.fromSource &&
+        return hidden == that.hidden &&
                 ordinalPosition == that.ordinalPosition &&
                 columnName.equals(that.columnName) &&
                 columnType.equals(that.columnType) &&
-                esFieldType.equals(that.esFieldType);
+                esFieldType.equals(that.esFieldType) &&
+                columnSource == that.columnSource;
     }
 
     @Override
     public int hashCode()
     {
-        return Objects.hash(columnName, columnType, esFieldType, fromSource, ordinalPosition);
+        return Objects.hash(columnName, columnType, esFieldType, columnSource, hidden, ordinalPosition);
     }
 }

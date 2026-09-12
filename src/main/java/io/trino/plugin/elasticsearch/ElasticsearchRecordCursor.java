@@ -179,15 +179,29 @@ public final class ElasticsearchRecordCursor
     {
         Object[] values = new Object[columnHandles.size()];
         for (int i = 0; i < columnHandles.size(); i++) {
-            ElasticsearchColumnHandle handle = columnHandles.get(i);
-            JsonNode field = handle.isFromSource()
-                    ? fromSource(hit, handle.getColumnName())
-                    : fromFields(hit, handle.getColumnName());
-            values[i] = field == null || field.isNull()
-                    ? null
-                    : convertValue(handle.getColumnType(), handle.getEsFieldType(), field);
+            values[i] = convertColumn(hit, columnHandles.get(i));
         }
         return values;
+    }
+
+    private static Object convertColumn(JsonNode hit, ElasticsearchColumnHandle handle)
+    {
+        return switch (handle.getColumnSource()) {
+            case MAPPED_FIELD -> convertNode(handle, fromSource(hit, handle.getColumnName()));
+            case MULTI_FIELD -> convertNode(handle, fromFields(hit, handle.getColumnName()));
+            case DOCUMENT_ID -> convertNode(handle, hit.path("_id"));
+            case DOCUMENT_SOURCE -> {
+                JsonNode source = hit.path("_source");
+                yield source.isObject() ? Slices.utf8Slice(source.toString()) : null;
+            }
+        };
+    }
+
+    private static Object convertNode(ElasticsearchColumnHandle handle, JsonNode node)
+    {
+        return node == null || node.isNull() || node.isMissingNode()
+                ? null
+                : convertValue(handle.getColumnType(), handle.getEsFieldType(), node);
     }
 
     private static JsonNode fromSource(JsonNode hit, String columnName)

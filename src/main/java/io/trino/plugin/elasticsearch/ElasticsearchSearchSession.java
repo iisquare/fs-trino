@@ -70,7 +70,7 @@ final class ElasticsearchSearchSession
 
         ImmutableList.Builder<String> fields = ImmutableList.builder();
         for (ElasticsearchColumnHandle columnHandle : columnHandles) {
-            if (!columnHandle.isFromSource()) {
+            if (columnHandle.getColumnSource() == ElasticsearchColumnSource.MULTI_FIELD) {
                 // Sub-fields of a multi-field are never part of _source and have to be requested explicitly.
                 fields.add(columnHandle.getColumnName());
             }
@@ -108,17 +108,19 @@ final class ElasticsearchSearchSession
             rows.add(hit);
         }
 
+        String nextPitId = response.path("pit_id").asText("");
+        if (!nextPitId.isEmpty()) {
+            // Elasticsearch may hand out a new point in time id with every search, and only the latest one
+            // can be used to release the point in time.
+            pitId = nextPitId;
+        }
+
         if (rows.size() < config.getPageSize()) {
             done = true;
             releaseContext();
         }
         else {
             lastSort = rows.get(rows.size() - 1).path("sort");
-            String nextPitId = response.path("pit_id").asText("");
-            if (!nextPitId.isEmpty()) {
-                // Elasticsearch may hand out a new point in time id with every search
-                pitId = nextPitId;
-            }
         }
         return rows;
     }

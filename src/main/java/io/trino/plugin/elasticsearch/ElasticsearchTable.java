@@ -39,7 +39,11 @@ public final class ElasticsearchTable
 
         ImmutableList.Builder<ColumnMetadata> builder = ImmutableList.builder();
         for (ElasticsearchColumn column : this.columns) {
-            builder.add(new ColumnMetadata(column.getName(), column.getType()));
+            builder.add(ColumnMetadata.builder()
+                    .setName(column.getName())
+                    .setType(column.getType())
+                    .setHidden(column.isHidden())
+                    .build());
         }
         this.columnMetadata = builder.build();
     }

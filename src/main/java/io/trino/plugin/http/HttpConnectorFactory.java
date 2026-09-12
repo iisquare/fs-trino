@@ -34,7 +34,7 @@ public final class HttpConnectorFactory
     @Override
     public String getName()
     {
-        return "fs_trino";
+        return "fs_http";
     }
 
     @Override

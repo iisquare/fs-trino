@@ -2,7 +2,7 @@
 
 `fs-trino` 是一个 Trino 插件，内置两个连接器：
 
-- `fs_trino`：通用 HTTP 数据源，只负责通过 HTTP 调用服务端注册好的 schema、table 和行数据，不感知业务系统的内部表结构、字段映射或数据来源。
+- `fs_http`：通用 HTTP 数据源，只负责通过 HTTP 调用服务端注册好的 schema、table 和行数据，不感知业务系统的内部表结构、字段映射或数据来源。
 - `fs_elasticsearch`：直连 Elasticsearch，把索引读成表，并把 keyword 等子字段注册为独立列。
 
 ## 技术栈
@@ -14,7 +14,7 @@
 
 ## 目录说明
 
-- `src/main/java/io/trino/plugin/http`：`fs_trino` 连接器源码。
+- `src/main/java/io/trino/plugin/http`：`fs_http` 连接器源码。
 - `src/main/java/io/trino/plugin/elasticsearch`：`fs_elasticsearch` 连接器源码。
 - `src/main/resources/META-INF/services/io.trino.spi.Plugin`：插件 SPI 入口。
 - `build.gradle`：插件构建配置。
@@ -53,7 +53,7 @@ unzip build/fs-trino-483.zip -d "$TRINO_HOME/plugin/fs-trino"
 
 ```bash
 cat > "$TRINO_HOME/etc/catalog/fs_bi.properties" <<'EOF'
-connector.name=fs_trino
+connector.name=fs_http
 base-uri=http://127.0.0.1:7815
 api-key=change-me
 api-key-header=x-api-key
@@ -71,7 +71,7 @@ SHOW CATALOGS;
 SHOW SCHEMAS FROM fs_bi;
 ```
 
-## Trino catalog 配置项
+## fs_http catalog 配置项
 
 | 配置 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
@@ -93,23 +93,25 @@ $TRINO_HOME/etc/catalog/fs_bi.properties -> catalog 名称为 fs_bi
 
 ### 关于 connector.name 中划线转下划线
 
-本插件的 `ConnectorFactory.getName()` 注册为 `fs_trino`。推荐在 catalog 中直接使用：
+本插件的 `ConnectorFactory.getName()` 注册为 `fs_http`。推荐在 catalog 中直接使用：
 
 ```properties
-connector.name=fs_trino
+connector.name=fs_http
 ```
 
 也可以写成：
 
 ```properties
-connector.name=fs-trino
+connector.name=fs-http
 ```
 
-原因是 Trino 在加载 catalog 时，会把 `connector.name` 中的中划线 `-` 按兼容逻辑转换为下划线 `_`，再用转换后的名称去匹配插件工厂。因此只要插件工厂注册的是 `fs_trino`，即使 catalog 写成 `fs-trino`，Trino 也会自动转换并正常匹配运行。
+原因是 Trino 在加载 catalog 时，会把 `connector.name` 中的中划线 `-` 按兼容逻辑转换为下划线 `_`，再用转换后的名称去匹配插件工厂。因此只要插件工厂注册的是 `fs_http`，即使 catalog 写成 `fs-http`，Trino 也会自动转换并正常匹配运行。
 
-不过使用 `connector.name=fs-trino` 时，Trino 会记录一条类似 `deprecated connector name` 的警告日志。为避免告警和歧义，推荐直接写 `connector.name=fs_trino`。
+不过使用 `connector.name=fs-http` 时，Trino 会记录一条类似 `deprecated connector name` 的警告日志。为避免告警和歧义，推荐直接写 `connector.name=fs_http`。
 
-因此这里统一使用下划线形式的连接器名 `fs_trino`。项目名、插件目录名以及 jar/zip 产物名仍保持 `fs-trino`，与 `connector.name` 是两个不同的概念。
+因此这里统一使用下划线形式的连接器名 `fs_http`。项目名、插件目录名以及 jar/zip 产物名仍保持 `fs-trino`，与 `connector.name` 是两个不同的概念。
+
+连接器名原本是 `fs_trino`，现已更名为 `fs_http`。已有的 catalog 文件必须同步把 `connector.name` 改成 `fs_http`，否则部署新插件后该 catalog 会加载失败。
 
 插件会把该 catalog 名称发送给服务端，服务端只负责注册 schema 和 table。
 
@@ -405,6 +407,20 @@ SELECT "name.keyword", COUNT(*) FROM fs_es.es.demo_products GROUP BY "name.keywo
 
 子字段的值不在 `_source` 中，插件通过 `_search` 的 `fields` 参数读取。`ignore_above` 等导致字段未索引时该列为 `NULL`；字段有多个值时只取第一个。
 
+每张表还有两个隐藏列。它们不出现在 `DESCRIBE` 和 `SELECT *` 的结果里，但可以按列名直接查询：
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `_id` | `varchar` | 文档 `_id`，用于去重、关联、增量定位 |
+| `_source` | `varchar` | 文档 `_source` 原文（JSON 字符串），可用 `json_extract` 解析，也能取到 mapping 里未注册的字段 |
+
+```sql
+SELECT _id, name FROM fs_es.es.demo_products LIMIT 10;
+SELECT json_extract("_source", '$.price') FROM fs_es.es.demo_products LIMIT 1;
+```
+
+这两个列名与官方 `elasticsearch` 连接器一致，便于在两者之间切换 SQL。官方还有 `_score` 列，本连接器不支持：读取时按文档顺序分页，没有相关性打分。
+
 ## 类型映射
 
 | Elasticsearch 类型 | Trino 类型 |
@@ -436,6 +452,36 @@ SELECT "name.keyword", COUNT(*) FROM fs_es.es.demo_products GROUP BY "name.keywo
 ## 支持的 Elasticsearch 版本
 
 `fields` 搜索参数要求 Elasticsearch 7.10 及以上，因此支持范围为 7.10 - 8.x，6.x 及以下不支持。
+
+## 与官方 elasticsearch 连接器的差异
+
+Trino 自带 `elasticsearch` 连接器。本连接器不依赖官方连接器的任何代码，两者互不影响，可以同时启用（各自一个 catalog 文件）。
+
+| 能力 | `fs_elasticsearch` | 官方 `elasticsearch` |
+| --- | --- | --- |
+| multi-field 子字段作为独立列（`name.keyword`） | 支持 | 不支持（解析 mapping 时忽略 `fields`，值只从 `_source` 取） |
+| `_id`、`_source` 隐藏列 | 支持，列名与官方一致 | 支持 |
+| `_score` 隐藏列 | 不支持 | 支持 |
+| object / nested 字段 | `json` 列 | `ROW` 类型，可直接写 `attributes.color` |
+| 谓词下推 | 无 | keyword、数值、日期可下推为 ES 查询 |
+| 并行读取 | 每个索引 1 个 split | 按 shard 拆分 |
+| `count(*)` | 全量分页扫描 | 走 ES count API |
+| 数组字段 | 取第一个元素或按类型转换 | `elasticsearch.array-mapping` 配置 |
+| 认证与 TLS | Basic 认证、可跳过证书校验 | Basic / AWS / keystore、truststore |
+| 其他 | 无 | `raw_query` 表函数、`nodes` 系统表、`_meta.trino` 的 `isArray` / `asRawJson` |
+
+选择建议：需要子字段列时用 `fs_es`；只看重谓词下推或并行扫描时用官方 `elasticsearch`。官方连接器的 catalog 示例（属性名与官方 483 一致）：
+
+```properties
+# $TRINO_HOME/etc/catalog/es.properties
+connector.name=elasticsearch
+elasticsearch.host=127.0.0.1
+elasticsearch.port=9200
+elasticsearch.default-schema-name=default
+elasticsearch.security=PASSWORD
+elasticsearch.auth.user=elastic
+elasticsearch.auth.password=admin888
+```
 
 ## fs_elasticsearch 排查
 

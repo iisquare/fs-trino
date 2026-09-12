@@ -26,19 +26,22 @@ public final class ElasticsearchColumn
     private final String name;
     private final Type type;
     private final String esFieldType;
-    private final boolean fromSource;
+    private final ElasticsearchColumnSource columnSource;
+    private final boolean hidden;
 
     @JsonCreator
     public ElasticsearchColumn(
             @JsonProperty("name") String name,
             @JsonProperty("type") Type type,
             @JsonProperty("esFieldType") String esFieldType,
-            @JsonProperty("fromSource") boolean fromSource)
+            @JsonProperty("columnSource") ElasticsearchColumnSource columnSource,
+            @JsonProperty("hidden") boolean hidden)
     {
         this.name = requireNonNull(name, "name is null");
         this.type = requireNonNull(type, "type is null");
         this.esFieldType = requireNonNull(esFieldType, "esFieldType is null");
-        this.fromSource = fromSource;
+        this.columnSource = requireNonNull(columnSource, "columnSource is null");
+        this.hidden = hidden;
     }
 
     @JsonProperty
@@ -60,9 +63,15 @@ public final class ElasticsearchColumn
     }
 
     @JsonProperty
-    public boolean isFromSource()
+    public ElasticsearchColumnSource getColumnSource()
     {
-        return fromSource;
+        return columnSource;
+    }
+
+    @JsonProperty
+    public boolean isHidden()
+    {
+        return hidden;
     }
 
     @Override
@@ -75,7 +84,8 @@ public final class ElasticsearchColumn
             return false;
         }
         ElasticsearchColumn that = (ElasticsearchColumn) o;
-        return fromSource == that.fromSource &&
+        return hidden == that.hidden &&
+                columnSource == that.columnSource &&
                 name.equals(that.name) &&
                 type.equals(that.type) &&
                 esFieldType.equals(that.esFieldType);
@@ -84,6 +94,6 @@ public final class ElasticsearchColumn
     @Override
     public int hashCode()
     {
-        return Objects.hash(name, type, esFieldType, fromSource);
+        return Objects.hash(name, type, esFieldType, columnSource, hidden);
     }
 }

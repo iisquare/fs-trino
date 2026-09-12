@@ -117,7 +117,8 @@ public final class ElasticsearchMetadata
                             column.getName(),
                             column.getType(),
                             column.getEsFieldType(),
-                            column.isFromSource(),
+                            column.getColumnSource(),
+                            column.isHidden(),
                             ordinalPosition));
             ordinalPosition++;
         }

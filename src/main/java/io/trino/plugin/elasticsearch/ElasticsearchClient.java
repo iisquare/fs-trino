@@ -50,6 +50,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
+import static io.trino.spi.type.VarcharType.VARCHAR;
 import static java.lang.String.format;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
@@ -57,6 +58,9 @@ import static java.util.Objects.requireNonNull;
 public final class ElasticsearchClient
 {
     private static final Logger log = Logger.get(ElasticsearchClient.class);
+
+    private static final String ID_COLUMN_NAME = "_id";
+    private static final String SOURCE_COLUMN_NAME = "_source";
 
     private static final Set<String> JSON_FIELD_TYPES = Set.of(
             "object",
@@ -217,16 +221,30 @@ public final class ElasticsearchClient
                 continue;
             }
 
-            List<ElasticsearchColumn> columns = new ArrayList<>();
+            List<ElasticsearchColumn> columns = builtinColumns();
             Set<String> columnNames = new HashSet<>();
-            expandFields(properties, "", true, columns, columnNames);
-            if (columns.isEmpty()) {
+            columns.forEach(column -> columnNames.add(column.getName()));
+            int builtinColumnCount = columns.size();
+            expandFields(properties, "", ElasticsearchColumnSource.MAPPED_FIELD, columns, columnNames);
+            if (columns.size() == builtinColumnCount) {
                 log.warn("Skipping Elasticsearch index %s because none of its fields can be mapped to a Trino type", indexName);
                 continue;
             }
             result.put(indexName, new ElasticsearchTable(indexName, columns));
         }
         return ImmutableMap.copyOf(result);
+    }
+
+    /**
+     * Columns that are not part of the mapping. They are hidden, so they stay out of {@code DESCRIBE} and
+     * {@code SELECT *}, but they can be selected by name.
+     */
+    private static List<ElasticsearchColumn> builtinColumns()
+    {
+        List<ElasticsearchColumn> columns = new ArrayList<>();
+        columns.add(new ElasticsearchColumn(ID_COLUMN_NAME, VARCHAR, "text", ElasticsearchColumnSource.DOCUMENT_ID, true));
+        columns.add(new ElasticsearchColumn(SOURCE_COLUMN_NAME, VARCHAR, "text", ElasticsearchColumnSource.DOCUMENT_SOURCE, true));
+        return columns;
     }
 
     /**
@@ -237,7 +255,7 @@ public final class ElasticsearchClient
     private void expandFields(
             JsonNode properties,
             String prefix,
-            boolean fromSource,
+            ElasticsearchColumnSource columnSource,
             List<ElasticsearchColumn> columns,
             Set<String> columnNames)
     {
@@ -265,13 +283,13 @@ public final class ElasticsearchClient
                     log.warn("Ignoring Elasticsearch field %s because a field with the same column name already exists", columnName);
                 }
                 else {
-                    columns.add(new ElasticsearchColumn(columnName, type, esFieldType, fromSource));
+                    columns.add(new ElasticsearchColumn(columnName, type, esFieldType, columnSource, false));
                 }
             }
 
             JsonNode subFields = definition.path("fields");
             if (subFields.isObject() && !subFields.isEmpty()) {
-                expandFields(subFields, columnName, false, columns, columnNames);
+                expandFields(subFields, columnName, ElasticsearchColumnSource.MULTI_FIELD, columns, columnNames);
             }
         }
     }
