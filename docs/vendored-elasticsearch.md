@@ -81,6 +81,24 @@ javap -v -p -cp build/libs/fs-trino-483.jar 'io.trino.plugin.elasticsearch.decod
 
 我们自己写的 `http` 连接器不受影响：它的 `@JsonCreator` 参数都标了 `@JsonProperty`，所以这个坑只会以"只有 ES 查询失败"的形式出现。
 
+## 打包：插件目录里不要有重复类
+
+官方 `plugin/trino-elasticsearch/pom.xml` 对运行时依赖做了两处显式处理，`build.gradle` 里对应照抄了，别删：
+
+- **排除 `commons-logging`**：官方在 `httpasyncclient` / `httpclient` / `elasticsearch-rest-client` 三处各排除一次。这些类已经由 airlift `log-manager` 带进来的 `jcl-over-slf4j` 提供，两份同时在插件目录里会出现重复类，httpclient 的日志走到哪一边取决于加载顺序。
+- **guice 用 `classes` classifier**：官方 pom 和 `trino-plugin-toolkit` 都是这么写的。不写 classifier 会把普通 jar 一起带进来，同一个 `com.google.inject.*` 两份共存，而且两份的字节并不相同（普通 jar 还多出一批 ASM 移位类）。
+
+插件目录里出现重复类不会立刻报错，只在真集群上以诡异的方式表现，所以每次动依赖都扫一遍：
+
+```bash
+cd /tmp && rm -rf dupcheck && mkdir dupcheck && cd dupcheck &&
+  jar xf <仓库>/build/fs-trino-483.zip &&
+  for j in *.jar; do jar tf "$j" | grep '\.class$' | grep -v '^META-INF/versions/' | sed "s|^|$j |"; done > all.txt &&
+  awk '{print $2}' all.txt | sort | uniq -d | sed 's/^/DUP: /'
+```
+
+输出为空才算过。另外，`json`/`bootstrap`/`configuration`/`log` 等 airlift 依赖会带进 jetty、netty、log4j、logback-core 这些传递依赖——官方同样带着，不是问题（官方工厂里有 `doNotInitializeLogging()`，不会去碰服务器的日志配置）。
+
 ## 与官方一致的部分（没有改）
 
 配置项（`elasticsearch.*` 全部属性）、隐藏列 `_id` / `_source` / `_score`、类型映射、谓词下推、按 shard 并行读、`count(*)` 走 count API、`raw_query` 表函数、`nodes` 系统表、`_meta.trino` 的 `isArray` / `asRawJson`、认证方式（`PASSWORD` / `AWS` / keystore / truststore）。
@@ -97,6 +115,6 @@ git diff --stat <上一次同步上游的 commit> -- src/main/java/io/trino/plug
 
 1. 取新 tag 的官方源码，覆盖 `src/main/java/io/trino/plugin/elasticsearch/`（保留本仓库新增的 `FsElasticsearchConnectorFactory` / `FsElasticsearchPlugin`，以及 4 处 `PATCH(fs-trino)`）。源码可整份 clone 到本地，也可以按文件从 `https://raw.githubusercontent.com/trinodb/trino/<tag>/plugin/trino-elasticsearch/src/main/java/io/trino/plugin/elasticsearch/<相对路径>` 取。
 2. 对照上面的补丁清单，确认 4 处的上下文没有漂移（官方若重构过 `parseType` / `ScanQueryPageSource`，补丁要跟着改）。
-3. 同步 `build.gradle` 里 ES rest-client、AWS SDK、airlift 的版本——新 tag 的 `plugin/trino-elasticsearch/pom.xml` 里锁着这些版本号。顺带确认 `compileJava` 的 `-parameters` 还在（见上方"编译参数"一节），新 tag 里的 descriptor 大概率还是同样的写法。
+3. 同步 `build.gradle` 里 ES rest-client、AWS SDK、airlift 的版本——新 tag 的 `plugin/trino-elasticsearch/pom.xml` 里锁着这些版本号。顺带确认两件容易丢的东西还在：`compileJava` 的 `-parameters`，以及打包的两条排除（guice 用 `classes` classifier、排除 `commons-logging`），见上方两节。
 4. 重新生成校验清单：`docs/vendored-elasticsearch.sha256`（换 tag 后 sha256 全变），生成方式见文件头注释。
 5. 跑验收：`gradle clean build`，再按 README 的验收 SQL 在本地 Trino 上过一遍（重点跑 keyword 子字段列的查询与 `DESCRIBE`）。

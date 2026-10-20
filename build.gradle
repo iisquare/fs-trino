@@ -34,10 +34,12 @@ dependencies {
     implementation "io.airlift:stats:${airliftVersion}"
     implementation "io.airlift:units:1.13"
     implementation "com.google.guava:guava:33.6.0-jre"
-    implementation "com.google.inject:guice:7.0.0"
+    // 官方（plugin/trino-elasticsearch/pom.xml 与 trino-plugin-toolkit）用的是 guice 的 classes classifier；
+    // 不写 classifier 会把普通 jar 也带进插件目录，同一个 com.google.inject.* 出现两份（字节还不一样）
+    implementation "com.google.inject:guice:7.0.0:classes"
     implementation "jakarta.annotation:jakarta.annotation-api:3.0.0"
     implementation "jakarta.validation:jakarta.validation-api:3.1.1"
-    implementation "org.weakref:jmxutils:1.21"
+    implementation "org.weakref:jmxutils:1.29"
     implementation("com.fasterxml.jackson.core:jackson-databind:${jacksonVersion}") {
         exclude group: 'com.fasterxml.jackson.core', module: 'jackson-annotations'
     }
@@ -64,6 +66,10 @@ configurations.runtimeClasspath {
     exclude group: 'com.fasterxml.jackson.core', module: 'jackson-annotations'
     exclude group: 'io.opentelemetry', module: 'opentelemetry-api'
     exclude group: 'io.opentelemetry', module: 'opentelemetry-context'
+    // 官方 plugin/trino-elasticsearch/pom.xml 在 httpasyncclient / httpclient / elasticsearch-rest-client
+    // 三处显式排除了它：这些类已由 airlift log-manager 带进来的 jcl-over-slf4j 提供，
+    // 两份同时在插件目录里是重复类，httpclient 的日志会走到不确定的一边
+    exclude group: 'commons-logging', module: 'commons-logging'
 }
 
 java {
