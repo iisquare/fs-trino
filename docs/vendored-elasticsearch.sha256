@@ -2,14 +2,16 @@
 # 上游路径: plugin/trino-elasticsearch/src/main/java/io/trino/plugin/elasticsearch/<相对路径>
 # 本仓库路径: src/main/java/io/trino/plugin/elasticsearch/<相对路径>
 # 校验（在仓库根目录执行）: sha256sum -c docs/vendored-elasticsearch.sha256
-# 下面 4 行是我们打过补丁的文件（与上游不一致），上游 sha256 记录在行内，见 docs/vendored-elasticsearch.md 的补丁清单。
+# 下面 7 行是我们打过补丁的文件（与上游不一致），上游 sha256 记录在行内，见 docs/vendored-elasticsearch.md 的补丁清单。
 # PATCHED  upstream-sha256=1af758376776ec5e7207c83b22930487920456ff9e3aece40e7caeee62955479  client/ElasticsearchClient.java
 # PATCHED  upstream-sha256=bcea0cae1f6df6a72361f2729f380527cbc58d26b512ce20a1eb4c1fbbceacf2  ScanQueryPageSource.java
 # PATCHED  upstream-sha256=b4a3653e50232ae1f6e432d2ec1b97f320cb9ef9794d3f06cf618031c42823f9  ElasticsearchMetadata.java
 # PATCHED  upstream-sha256=a8d9681b07eeb211c0dec07c86235aa4cfb98b512b6bc2a5cd1181c2c61e41ce  client/IndexMetadata.java
+# PATCHED  upstream-sha256=c587bd809ad0ae5684c6a74964df4b32dbeccfbf71d38161c7dfb9efefd9eaea  CountQueryPageSource.java
+# PATCHED  upstream-sha256=108ec947769d945d392d2f115d550e83be60e33a6aa1c658b6459ca35225603d  ElasticsearchQueryBuilder.java
+# PATCHED  upstream-sha256=383cef1e7f23d65f34b4a6f9073a851bdc8f114ea13edccb7acd9295f4af600e  ElasticsearchTableHandle.java
 68b0518aa80af5d60de9276f6a2e0add6cbf3c31c62b99c4f4938e26a5765da0  src/main/java/io/trino/plugin/elasticsearch/AwsSecurityConfig.java
 5a8cc5475e45755ccb5a8e2fe1c3c6632a196967e86bc4b2e8726fdda01cd86e  src/main/java/io/trino/plugin/elasticsearch/BuiltinColumns.java
-c587bd809ad0ae5684c6a74964df4b32dbeccfbf71d38161c7dfb9efefd9eaea  src/main/java/io/trino/plugin/elasticsearch/CountQueryPageSource.java
 6f59017074f0c054435b03ccf4c3d75019265e790b3edfafb9026b8bbf24bf74  src/main/java/io/trino/plugin/elasticsearch/DecoderDescriptor.java
 4b658ecdf19a8018870c16a0bb7bfb05fc6a4b5d73abc9ae64ba937c528626a4  src/main/java/io/trino/plugin/elasticsearch/ElasticsearchColumnHandle.java
 12eeccc3fa23384bb305d04b7a3bd52e23cde4177c64d0436861dc6f2dc7e529  src/main/java/io/trino/plugin/elasticsearch/ElasticsearchConfig.java
@@ -19,10 +21,8 @@ c587bd809ad0ae5684c6a74964df4b32dbeccfbf71d38161c7dfb9efefd9eaea  src/main/java/
 419d5853e170fe1036bae2a8524d3a2e6d0b3cf8de2d000c63d2e95897b3b30d  src/main/java/io/trino/plugin/elasticsearch/ElasticsearchErrorCode.java
 c548dc415b188b46390fe5d60a334c0f3c64f97fed8fe9ae5c4ec4f48b624fed  src/main/java/io/trino/plugin/elasticsearch/ElasticsearchPageSourceProvider.java
 c49a50e1e80888991362b3488533b2f51205082896a203963e43cc39d95a6789  src/main/java/io/trino/plugin/elasticsearch/ElasticsearchPlugin.java
-108ec947769d945d392d2f115d550e83be60e33a6aa1c658b6459ca35225603d  src/main/java/io/trino/plugin/elasticsearch/ElasticsearchQueryBuilder.java
 46164a7157b2cf1e11da83d0e48fb1a7b598cbab9df3c960468e5d85f69c30f9  src/main/java/io/trino/plugin/elasticsearch/ElasticsearchSplit.java
 64b314a15fbcd4bd8df9543f471b0cd17463cc42a3614c05ca1a3b120cc3d1a5  src/main/java/io/trino/plugin/elasticsearch/ElasticsearchSplitManager.java
-383cef1e7f23d65f34b4a6f9073a851bdc8f114ea13edccb7acd9295f4af600e  src/main/java/io/trino/plugin/elasticsearch/ElasticsearchTableHandle.java
 c277fd92f99ac5bb5718b92bfe79530bf58af8fa060c740d528a1fca2ce19bf8  src/main/java/io/trino/plugin/elasticsearch/ElasticsearchTransactionHandle.java
 5664624bad3428960bb3d660291388f8b8a7f0e5f92f7ebe6614f6dc05a2521a  src/main/java/io/trino/plugin/elasticsearch/NodesSystemTable.java
 aa5819b3f0e4888c9c85cc66064247782e7b51b23166bff8bab76f09dcc55bf9  src/main/java/io/trino/plugin/elasticsearch/PassthroughQueryPageSource.java

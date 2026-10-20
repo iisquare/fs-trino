@@ -125,7 +125,11 @@ public class ScanQueryPageSource
         SearchResult searchResult = client.beginSearch(
                 split.index(),
                 split.shard(),
-                buildSearchQuery(table.constraint().transformKeys(ElasticsearchColumnHandle.class::cast), table.query(), table.regexes()),
+                buildSearchQuery(
+                        table.constraint().transformKeys(ElasticsearchColumnHandle.class::cast),
+                        table.query(),
+                        table.regexes(),
+                        table.phrases()),
                 needAllFields ? Optional.empty() : Optional.of(requiredFields),
                 documentFields,
                 sort,

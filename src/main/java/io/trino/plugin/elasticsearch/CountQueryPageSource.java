@@ -40,10 +40,15 @@ class CountQueryPageSource
         requireNonNull(split, "split is null");
 
         long start = System.nanoTime();
+        // PATCH(fs-trino): include match_phrase pushdowns in count queries as well
         long count = client.count(
                 split.index(),
                 split.shard(),
-                buildSearchQuery(table.constraint().transformKeys(ElasticsearchColumnHandle.class::cast), table.query(), table.regexes()));
+                buildSearchQuery(
+                        table.constraint().transformKeys(ElasticsearchColumnHandle.class::cast),
+                        table.query(),
+                        table.regexes(),
+                        table.phrases()));
         readTimeNanos = System.nanoTime() - start;
 
         if (table.limit().isPresent()) {

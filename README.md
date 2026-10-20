@@ -25,11 +25,11 @@
 
 ## fs_elasticsearch 的实现方式：vendored 官方源码
 
-`fs_elasticsearch` **不是另写一套实现**：官方 483 tag 的 `plugin/trino-elasticsearch` 源码原样收在本仓库里，只在 keyword 子字段（multi-field）这部分打了 4 处补丁。官方功能、配置项、隐藏列、类型映射、谓词下推全部保持原样。
+`fs_elasticsearch` **不是另写一套实现**：官方 483 tag 的 `plugin/trino-elasticsearch` 源码原样收在本仓库里，只在 keyword 子字段（multi-field）和 text 字段 `LIKE '%...%'` 短语下推这两部分打了补丁，共涉及 7 个文件。其余官方功能、配置项、隐藏列、类型映射保持原样。
 
 - 官方源码 52 个文件 + 本仓库新增 2 个（`FsElasticsearchConnectorFactory`、`FsElasticsearchPlugin`），都在 `src/main/java/io/trino/plugin/elasticsearch/`。
-- 与上游不一致的只有 4 个文件，每处都有 `// PATCH(fs-trino)` 注释：`grep -rn 'PATCH(fs-trino)' src/main/java` 一次看全。
-- 48 个未改动文件与上游逐字节一致：`sha256sum -c docs/vendored-elasticsearch.sha256`。
+- 与上游不一致的只有 7 个文件，每处都有 `// PATCH(fs-trino)` 注释：`grep -rn 'PATCH(fs-trino)' src/main/java` 一次看全。
+- 45 个未改动文件与上游逐字节一致：`sha256sum -c docs/vendored-elasticsearch.sha256`。
 - 补丁内容、升级上游的步骤见 [docs/vendored-elasticsearch.md](docs/vendored-elasticsearch.md)。
 
 **构建不需要 docker、也不需要官方镜像**：全部依赖来自 Maven Central，版本按官方 483 的 `pom.xml` 锁定（见 `build.gradle`）。
@@ -87,7 +87,7 @@ done
 
 ### 升级 Trino 版本时
 
-1. 按 [docs/vendored-elasticsearch.md](docs/vendored-elasticsearch.md) 同步官方源码、打回 4 处补丁、更新 `build.gradle` 里的依赖版本；
+1. 按 [docs/vendored-elasticsearch.md](docs/vendored-elasticsearch.md) 同步官方源码、打回 7 个文件里的补丁、更新 `build.gradle` 里的依赖版本；
 2. 如果还要做对拍，`rm -rf libs/official-es` 并按本节重新抽取。
 
 ### 许可
@@ -107,7 +107,7 @@ GRADLE_USER_HOME=/tmp/gradle-home \
 
 构建产物：
 
-- `build/libs/fs-trino-483.jar`：插件 jar，含 `fs_http` 与 vendored 的官方 elasticsearch 实现（+4 处补丁）及两个插件入口。
+- `build/libs/fs-trino-483.jar`：插件 jar，含 `fs_http` 与 vendored 的官方 elasticsearch 实现（+7 个文件的补丁）及两个插件入口。
 - `build/fs-trino-483.zip`：Trino 插件部署包，含插件 jar 及运行期依赖（Elasticsearch rest-client、AWS SDK、guava、guice、airlift 等），解到插件目录即可用。
 
 编译参数**不要删**：`build.gradle` 里 `compileJava` 带 `-parameters`，和官方 Maven 构建一致。SPI 里大量 `@JsonCreator` 构造器的参数上没有 `@JsonProperty`（例如 `VarcharDecoder.Descriptor(String path)`），Jackson 只能靠 class 文件里的参数名反序列化；少了它，coordinator 发出去的列句柄在 worker 侧构造不出来，查询会以完全不相干的现象失败：
@@ -446,7 +446,7 @@ SELECT * FROM fs_bi.api.user_list LIMIT 10;
 
 # fs_elasticsearch 连接器
 
-`fs_elasticsearch` 直连 Elasticsearch，用的是**官方 483 连接器的实现 + 4 处 keyword 子字段补丁**（见 [docs/vendored-elasticsearch.md](docs/vendored-elasticsearch.md)）。配置项、类型映射、隐藏列、谓词下推、`raw_query` 表函数、`nodes` 系统表都与官方 `elasticsearch` 连接器一致；与官方**唯一的差异**是：mapping 里 `fields` 下的 keyword 子字段会注册成独立列。
+`fs_elasticsearch` 直连 Elasticsearch，用的是**官方 483 连接器的实现 + keyword 子字段和 text 字段 LIKE 短语下推补丁**（见 [docs/vendored-elasticsearch.md](docs/vendored-elasticsearch.md)）。配置项、类型映射、隐藏列、`raw_query` 表函数、`nodes` 系统表都与官方 `elasticsearch` 连接器一致；差异是：mapping 里 `fields` 下的 keyword 子字段会注册成独立列，text 字段上的 `LIKE '%...%'` 会下推为 `match_phrase`。
 
 每个 ES 索引对应一张表，全部归入一个可配置的 schema（默认 `default`）。
 
@@ -589,7 +589,8 @@ SELECT * FROM fs_es.system.nodes;
 
 - 每个分片一个 split，多分片并行读（用 `preference=_shards:N` 固定到分片）。
 - 每个分片用 scroll 分批取，批大小 `elasticsearch.scroll-size`、上下文超时 `elasticsearch.scroll-timeout`，读完释放。
-- 谓词下推：`=`、`IN`、范围、`LIKE` 分别翻译成 ES 的 `term`、`bool(should)`、`range`、`regexp` 查询，只对 keyword（含 keyword 子字段）、整型/浮点、`date`、`boolean` 列生效（`scaled_float` 列不下推）。
+- 谓词下推：`=`、`IN`、范围分别翻译成 ES 的 `term`、`bool(should)`、`range` 查询，只对 keyword（含 keyword 子字段）、整型/浮点、`date`、`boolean` 列生效（`scaled_float` 列不下推）。`LIKE` 对 keyword 列翻译成 `regexp`；对 text 列，只有 `LIKE '%literal%'` 这种单一短语模式会翻译成 `match_phrase`，其他 LIKE 模式仍在 Trino 侧过滤。
+- text 字段的 `match_phrase` 使用 ES 字段的 search analyzer，和字符子串语义不完全等价；需要严格短语语义时，由 ES 侧 analyzer 插件配合处理。
 - 投影下推：只取用到的列，普通列用 `_source.includes` 裁剪，keyword 子字段列用 `docvalue_fields` 取。
 - `count(*)` 走 ES 的 count API，不读文档。
 
@@ -599,12 +600,13 @@ SELECT * FROM fs_es.system.nodes;
 
 ## 与官方 elasticsearch 连接器的差异
 
-`fs_elasticsearch` 就是官方连接器（vendored 源码 + 4 处补丁），**唯一的差异**是：mapping 里 `fields` 下的 keyword 子字段会多出独立列（例如 `name.keyword`）。
+`fs_elasticsearch` 就是官方连接器（vendored 源码 + 7 个文件的补丁），差异是：mapping 里 `fields` 下的 keyword 子字段会多出独立列（例如 `name.keyword`），以及 text 字段的 `LIKE '%literal%'` 会下推为 `match_phrase`。
 
 | | `fs_elasticsearch` | 官方 `elasticsearch` |
 | --- | --- | --- |
 | keyword 子字段作为独立列（`name.keyword`） | 支持 | 不支持（解析 mapping 时忽略 `fields`，值只从 `_source` 取） |
-| 其余全部能力（配置项、类型映射、隐藏列、谓词下推、并行读、`count(*)`、`raw_query`、`nodes`、`_meta.trino`、认证方式） | 相同 | 相同 |
+| text 字段 `LIKE '%literal%'` 下推为 `match_phrase` | 支持 | 不支持（留在 Trino 侧过滤） |
+| 其余能力（配置项、类型映射、隐藏列、其他谓词下推、并行读、`count(*)`、`raw_query`、`nodes`、`_meta.trino`、认证方式） | 相同 | 相同 |
 
 剩下的差别只有注册名：本插件注册成 `fs_elasticsearch`，镜像自带的官方连接器注册成 `elasticsearch`，因此同一个 Trino 里两个 catalog 可以并存，用同一条 SQL 对拍（官方那一份的 catalog 属性名、默认值与 `fs_es.properties` 完全一致）：
 

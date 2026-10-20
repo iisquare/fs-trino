@@ -58,6 +58,12 @@ dependencies {
     implementation "software.amazon.awssdk:regions:${awsSdkVersion}"
     implementation "software.amazon.awssdk:sdk-core:${awsSdkVersion}"
     implementation "software.amazon.awssdk:sts:${awsSdkVersion}"
+
+    testImplementation "io.trino:trino-spi:${trinoVersion}"
+    testImplementation "io.airlift:slice:2.8"
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
 configurations.runtimeClasspath {
@@ -103,4 +109,8 @@ tasks.register('trinoPlugin', Zip) {
 
 tasks.named('build') {
     dependsOn tasks.named('trinoPlugin')
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
 }

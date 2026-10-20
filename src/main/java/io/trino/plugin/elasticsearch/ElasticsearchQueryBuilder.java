@@ -54,7 +54,11 @@ public final class ElasticsearchQueryBuilder
 
     private ElasticsearchQueryBuilder() {}
 
-    public static JsonNode buildSearchQuery(TupleDomain<ElasticsearchColumnHandle> constraint, Optional<String> query, Map<String, String> regexes)
+    public static JsonNode buildSearchQuery(
+            TupleDomain<ElasticsearchColumnHandle> constraint,
+            Optional<String> query,
+            Map<String, String> regexes,
+            Map<String, String> phrases)
     {
         ArrayNode filterClauses = JSON.arrayNode();
         ArrayNode mustNotClauses = JSON.arrayNode();
@@ -76,6 +80,9 @@ public final class ElasticsearchQueryBuilder
                 JSON.objectNode().set(
                         "bool",
                         boolQuery().set("must", JSON.arrayNode().add(regexpQuery(name, value))))));
+
+        // PATCH(fs-trino): text-column LIKE '%literal%' is pushed down as match_phrase
+        phrases.forEach((name, value) -> filterClauses.add(matchPhraseQuery(name, value)));
 
         query.ifPresent(q -> mustClauses.add(queryStringQuery(q)));
 
@@ -219,6 +226,13 @@ public final class ElasticsearchQueryBuilder
     {
         return JSON.objectNode().set(
                 "regexp",
+                JSON.objectNode().put(field, value));
+    }
+
+    private static ObjectNode matchPhraseQuery(String field, String value)
+    {
+        return JSON.objectNode().set(
+                "match_phrase",
                 JSON.objectNode().put(field, value));
     }
 

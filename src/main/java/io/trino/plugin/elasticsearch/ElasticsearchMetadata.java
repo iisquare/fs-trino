@@ -510,6 +510,7 @@ public class ElasticsearchMetadata
                 handle.index(),
                 handle.constraint(),
                 handle.regexes(),
+                handle.phrases(),
                 handle.query(),
                 OptionalLong.of(limit),
                 ImmutableSet.of());
@@ -546,6 +547,7 @@ public class ElasticsearchMetadata
 
         ConnectorExpression oldExpression = constraint.getExpression();
         Map<String, String> newRegexes = new HashMap<>(handle.regexes());
+        Map<String, String> newPhrases = new HashMap<>(handle.phrases());
         List<ConnectorExpression> expressions = ConnectorExpressions.extractConjuncts(constraint.getExpression());
         List<ConnectorExpression> notHandledExpressions = new ArrayList<>();
         for (ConnectorExpression expression : expressions) {
@@ -562,13 +564,22 @@ public class ElasticsearchMetadata
                         escape = Optional.of((Slice) ((Constant) arguments.get(2)).getValue());
                     }
 
-                    if (!newRegexes.containsKey(columnName) && pattern instanceof Slice slice) {
+                    if (pattern instanceof Slice slice) {
                         IndexMetadata metadata = client.getIndexMetadata(handle.index());
-                        if (metadata.schema()
-                                .fields().stream()
-                                .anyMatch(field -> columnName.equals(field.name()) && isKeywordType(field.type()))) {
+                        Optional<IndexMetadata.Type> fieldType = metadata.schema().fields().stream()
+                                .filter(field -> columnName.equals(field.name()))
+                                .map(IndexMetadata.Field::type)
+                                .findFirst();
+                        if (fieldType.isPresent() && !newRegexes.containsKey(columnName) && isKeywordType(fieldType.get())) {
                             newRegexes.put(columnName, likeToRegexp(slice, escape));
                             continue;
+                        }
+                        if (fieldType.isPresent() && !newPhrases.containsKey(columnName) && isTextType(fieldType.get())) {
+                            Optional<String> phrase = likeToPhrase(slice, escape);
+                            if (phrase.isPresent()) {
+                                newPhrases.put(columnName, phrase.get());
+                                continue;
+                            }
                         }
                     }
                 }
@@ -587,6 +598,7 @@ public class ElasticsearchMetadata
                 handle.index(),
                 newDomain,
                 newRegexes,
+                newPhrases,
                 handle.query(),
                 handle.limit(),
                 ImmutableSet.of());
@@ -655,6 +667,57 @@ public class ElasticsearchMetadata
 
         checkEscape(!escaped);
         return regex.toString();
+    }
+
+    // PATCH(fs-trino): translate the subset of LIKE patterns that can be represented by a phrase query.
+    // Only '%literal%' is supported. The literal may contain escaped '%', '_' or the escape character,
+    // but must not contain an unescaped wildcard. Other patterns stay in Trino so their semantics are
+    // preserved; a phrase query matches an analyzed token sequence, not an arbitrary character substring.
+    protected static Optional<String> likeToPhrase(Slice pattern, Optional<Slice> escape)
+    {
+        Optional<Character> escapeChar = escape.map(ElasticsearchMetadata::getEscapeChar);
+        StringBuilder phrase = new StringBuilder();
+        boolean escaped = false;
+        boolean leadingWildcard = false;
+        boolean sawLiteral = false;
+        boolean trailingWildcard = false;
+        int position = 0;
+        while (position < pattern.length()) {
+            int currentChar = getCodePointAt(pattern, position);
+            position += lengthOfCodePoint(currentChar);
+            if (escaped) {
+                if (currentChar != '%' && currentChar != '_' && !(escapeChar.isPresent() && currentChar == escapeChar.get())) {
+                    return Optional.empty();
+                }
+                phrase.appendCodePoint(currentChar);
+                escaped = false;
+                sawLiteral = true;
+                continue;
+            }
+            if (escapeChar.isPresent() && currentChar == escapeChar.get()) {
+                escaped = true;
+                continue;
+            }
+            if (currentChar == '%') {
+                if (sawLiteral) {
+                    trailingWildcard = true;
+                }
+                else {
+                    leadingWildcard = true;
+                }
+                continue;
+            }
+            if (currentChar == '_' || trailingWildcard) {
+                return Optional.empty();
+            }
+            phrase.appendCodePoint(currentChar);
+            sawLiteral = true;
+        }
+
+        if (escaped || !leadingWildcard || !trailingWildcard || !sawLiteral || phrase.toString().isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.of(phrase.toString());
     }
 
     private static void checkEscape(boolean condition)
@@ -826,6 +889,13 @@ public class ElasticsearchMetadata
     {
         return type instanceof MultiFieldType
                 || (type instanceof PrimitiveType primitiveType && primitiveType.name().toLowerCase(ENGLISH).equals("keyword"));
+    }
+
+    // PATCH(fs-trino): text columns can use match_phrase for LIKE '%literal%' pushdown.
+    private static boolean isTextType(IndexMetadata.Type type)
+    {
+        return type instanceof PrimitiveType primitiveType
+                && primitiveType.name().toLowerCase(ENGLISH).equals("text");
     }
 
     private record InternalTableMetadata(SchemaTableName tableName, List<ColumnMetadata> columnMetadata, Map<String, ColumnHandle> columnHandles) {}

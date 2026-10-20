@@ -33,6 +33,8 @@ public record ElasticsearchTableHandle(
         String index,
         TupleDomain<ColumnHandle> constraint,
         Map<String, String> regexes,
+        // PATCH(fs-trino): match_phrase queries pushed down for text-column LIKE '%literal%'
+        Map<String, String> phrases,
         Optional<String> query,
         OptionalLong limit,
         Set<ElasticsearchColumnHandle> columns)
@@ -50,6 +52,7 @@ public record ElasticsearchTableHandle(
                 index,
                 TupleDomain.all(),
                 ImmutableMap.of(),
+                ImmutableMap.of(),
                 query,
                 OptionalLong.empty(),
                 ImmutableSet.of());
@@ -63,6 +66,7 @@ public record ElasticsearchTableHandle(
                 index,
                 constraint,
                 regexes,
+                phrases,
                 query,
                 limit,
                 columns);
@@ -75,6 +79,7 @@ public record ElasticsearchTableHandle(
         requireNonNull(index, "index is null");
         requireNonNull(constraint, "constraint is null");
         regexes = ImmutableMap.copyOf(regexes);
+        phrases = ImmutableMap.copyOf(phrases);
         columns = ImmutableSet.copyOf(columns);
         requireNonNull(query, "query is null");
         requireNonNull(limit, "limit is null");
@@ -91,6 +96,13 @@ public record ElasticsearchTableHandle(
             attributes.append("regexes=[");
             attributes.append(regexes.entrySet().stream()
                     .map(regex -> regex.getKey() + ":" + regex.getValue())
+                    .collect(Collectors.joining(", ")));
+            attributes.append("]");
+        }
+        if (!phrases.isEmpty()) {
+            attributes.append("phrases=[");
+            attributes.append(phrases.entrySet().stream()
+                    .map(phrase -> phrase.getKey() + ":" + phrase.getValue())
                     .collect(Collectors.joining(", ")));
             attributes.append("]");
         }
