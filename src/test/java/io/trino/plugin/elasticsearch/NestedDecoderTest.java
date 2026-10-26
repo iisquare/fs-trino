@@ -83,6 +83,35 @@ class NestedDecoderTest
         assertRow((RowType) arrayType.getElementType(), rows, 0, "Beijing", 100000L);
     }
 
+    @Test
+    void testKeywordMultiFieldInsideRowFallsBackToParentValue()
+    {
+        RowType rowType = RowType.from(List.of(
+                RowType.field("city", VARCHAR),
+                RowType.field("city.keyword", VARCHAR)));
+        RowDecoder decoder = new RowDecoder(
+                "address",
+                List.of("city", "city.keyword"),
+                List.of(
+                        new VarcharDecoder("address.city"),
+                        new VarcharDecoder("address.city.keyword")));
+        Map<String, Object> address = Map.of("city", "Beijing");
+        SearchDocument document = new SearchDocument(
+                "1",
+                1.0f,
+                Map.of("address", address),
+                "{}",
+                2,
+                Map.of());
+        BlockBuilder builder = rowType.createBlockBuilder(null, 1);
+
+        decoder.decode(document, () -> address, builder);
+        SqlRow row = (SqlRow) rowType.getObject(builder.build(), 0);
+
+        assertEquals("Beijing", VARCHAR.getSlice(row.getUnderlyingFieldBlock(0), row.getUnderlyingFieldPosition(0)).toStringUtf8());
+        assertEquals("Beijing", VARCHAR.getSlice(row.getUnderlyingFieldBlock(1), row.getUnderlyingFieldPosition(1)).toStringUtf8());
+    }
+
     private static ArrayType nestedAddressType()
     {
         return new ArrayType(RowType.from(List.of(

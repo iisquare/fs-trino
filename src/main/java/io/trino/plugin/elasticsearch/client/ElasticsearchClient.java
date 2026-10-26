@@ -514,9 +514,9 @@ public class ElasticsearchClient
                     if (value.has("format")) {
                         formats = Arrays.asList(value.get("format").asText().split("\\|\\|"));
                     }
-                    result.add(new IndexMetadata.Field(asRawJson, isArray, name, new IndexMetadata.DateTimeType(formats)));
+                    result.add(new IndexMetadata.Field(asRawJson, isArray, name, new IndexMetadata.DateTimeType(formats), supportsPredicatePushdown(type, value)));
                 }
-                case "scaled_float" -> result.add(new IndexMetadata.Field(asRawJson, isArray, name, new IndexMetadata.ScaledFloatType(value.get("scaling_factor").asDouble())));
+                case "scaled_float" -> result.add(new IndexMetadata.Field(asRawJson, isArray, name, new IndexMetadata.ScaledFloatType(value.get("scaling_factor").asDouble()), supportsPredicatePushdown(type, value)));
                 case "object" -> {
                     if (value.has("properties")) {
                         result.add(new IndexMetadata.Field(asRawJson, isArray, name, parseType(value.get("properties"), metaNode)));
@@ -533,7 +533,7 @@ public class ElasticsearchClient
                         LOG.debug("Ignoring empty nested field: %s", name);
                     }
                 }
-                default -> result.add(new IndexMetadata.Field(asRawJson, isArray, name, new IndexMetadata.PrimitiveType(type)));
+                default -> result.add(new IndexMetadata.Field(asRawJson, isArray, name, new IndexMetadata.PrimitiveType(type), supportsPredicatePushdown(type, value)));
             }
 
             // PATCH(fs-trino): register the multi-fields of this field (its "fields" block, e.g. name.keyword) as
@@ -556,12 +556,28 @@ public class ElasticsearchClient
                             ? subMetaNode.get("isArray").asBoolean()
                             : isArray;
 
-                    result.add(new IndexMetadata.Field(false, subIsArray, subName, new IndexMetadata.MultiFieldType()));
+                    result.add(new IndexMetadata.Field(
+                            false,
+                            subIsArray,
+                            subName,
+                            new IndexMetadata.MultiFieldType(),
+                            supportsPredicatePushdown(subType, subField.getValue())));
                 }
             }
         }
 
         return new IndexMetadata.ObjectType(result.build());
+    }
+
+    private static boolean supportsPredicatePushdown(String type, JsonNode mapping)
+    {
+        if (!mapping.path("index").asBoolean(true)) {
+            return false;
+        }
+        if ("keyword".equals(type) && (mapping.has("normalizer") || mapping.has("ignore_above"))) {
+            return false;
+        }
+        return true;
     }
 
     private static JsonNode nullSafeNode(JsonNode jsonNode, String name)

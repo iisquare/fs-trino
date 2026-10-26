@@ -25,11 +25,11 @@
 
 ## fs_elasticsearch 的实现方式：vendored 官方源码
 
-`fs_elasticsearch` **不是另写一套实现**：官方 483 tag 的 `plugin/trino-elasticsearch` 源码原样收在本仓库里，只在 keyword 子字段（multi-field）、text 字段 `LIKE '%...%'` 短语下推、nested 对象数组和 `any_match` nested 下推这几部分打了补丁，共涉及 7 个官方文件。其余官方功能、配置项、隐藏列和类型映射保持原样。
+`fs_elasticsearch` **不是另写一套实现**：官方 483 tag 的 `plugin/trino-elasticsearch` 源码原样收在本仓库里，只在 keyword 子字段（multi-field）、text 字段 `LIKE '%...%'` 短语下推、nested 标量与数组映射及 nested 谓词下推这几部分打了补丁，共涉及 9 个官方文件。其余官方功能、配置项、隐藏列和类型映射保持原样。
 
 - 官方源码 52 个文件 + 本仓库新增 4 个（`FsElasticsearchConnectorFactory`、`FsElasticsearchPlugin`、`ElasticsearchNestedPredicateTranslator`、`ElasticsearchNestedQuery`），都在 `src/main/java/io/trino/plugin/elasticsearch/`。
-- 与上游不一致的只有 7 个文件，每处都有 `// PATCH(fs-trino)` 注释：`grep -rn 'PATCH(fs-trino)' src/main/java` 一次看全。
-- 45 个未改动文件与上游逐字节一致：`sha256sum -c docs/vendored-elasticsearch.sha256`。
+- 与上游不一致的只有 9 个官方文件，每处都有 `// PATCH(fs-trino)` 注释：`grep -rn 'PATCH(fs-trino)' src/main/java` 一次看全。
+- 43 个未改动文件与上游逐字节一致：`sha256sum -c docs/vendored-elasticsearch.sha256`。
 - 补丁内容、升级上游的步骤见 [docs/vendored-elasticsearch.md](docs/vendored-elasticsearch.md)。
 
 **构建不需要 docker、也不需要官方镜像**：全部依赖来自 Maven Central，版本按官方 483 的 `pom.xml` 锁定（见 `build.gradle`）。
@@ -87,7 +87,7 @@ done
 
 ### 升级 Trino 版本时
 
-1. 按 [docs/vendored-elasticsearch.md](docs/vendored-elasticsearch.md) 同步官方源码、打回 7 个文件里的补丁、更新 `build.gradle` 里的依赖版本；
+1. 按 [docs/vendored-elasticsearch.md](docs/vendored-elasticsearch.md) 同步官方源码、打回 9 个文件里的补丁、更新 `build.gradle` 里的依赖版本；
 2. 如果还要做对拍，`rm -rf libs/official-es` 并按本节重新抽取。
 
 ### 许可
@@ -107,7 +107,7 @@ GRADLE_USER_HOME=/tmp/gradle-home \
 
 构建产物：
 
-- `build/libs/fs-trino-483.jar`：插件 jar，含 `fs_http` 与 vendored 的官方 elasticsearch 实现（+7 个文件的补丁）及两个插件入口。
+- `build/libs/fs-trino-483.jar`：插件 jar，含 `fs_http` 与 vendored 的官方 elasticsearch 实现（+9 个文件的补丁）及两个插件入口。
 - `build/fs-trino-483.zip`：Trino 插件部署包，含插件 jar 及运行期依赖（Elasticsearch rest-client、AWS SDK、guava、guice、airlift 等），解到插件目录即可用。
 
 编译参数**不要删**：`build.gradle` 里 `compileJava` 带 `-parameters`，和官方 Maven 构建一致。SPI 里大量 `@JsonCreator` 构造器的参数上没有 `@JsonProperty`（例如 `VarcharDecoder.Descriptor(String path)`），Jackson 只能靠 class 文件里的参数名反序列化；少了它，coordinator 发出去的列句柄在 worker 侧构造不出来，查询会以完全不相干的现象失败：
@@ -446,7 +446,7 @@ SELECT * FROM fs_bi.api.user_list LIMIT 10;
 
 # fs_elasticsearch 连接器
 
-`fs_elasticsearch` 直连 Elasticsearch，用的是**官方 483 连接器的实现 + keyword 子字段、text 字段 LIKE 短语下推、nested 对象数组和 `any_match` nested 下推补丁**（见 [docs/vendored-elasticsearch.md](docs/vendored-elasticsearch.md)）。配置项、隐藏列、`raw_query` 表函数、`nodes` 系统表都与官方 `elasticsearch` 连接器一致；主要差异是：mapping 里 `fields` 下的 keyword 子字段会注册成独立列，text 字段上的 `LIKE '%...%'` 会下推为 `match_phrase`，`nested` 会完整暴露成对象数组，并且 `any_match` 会下推为 ES `nested` query。
+`fs_elasticsearch` 直连 Elasticsearch，用的是**官方 483 连接器的实现 + keyword 子字段、text 字段 LIKE 短语下推、nested 标量/数组映射及 nested 谓词下推补丁**（见 [docs/vendored-elasticsearch.md](docs/vendored-elasticsearch.md)）。配置项、隐藏列、`raw_query` 表函数、`nodes` 系统表都与官方 `elasticsearch` 连接器一致；主要差异是：mapping 里 `fields` 下的 keyword 子字段会注册成独立列，text 字段上的 `LIKE '%...%'` 会下推为 `match_phrase`，nested 谓词会生成正确的 ES `nested` query，数组 nested 使用 `any_match` 过滤。
 
 每个 ES 索引对应一张表，全部归入一个可配置的 schema（默认 `default`）。
 
@@ -494,7 +494,8 @@ elasticsearch.auth.password=admin888
 - 索引即表，全部归入 `elasticsearch.default-schema-name` 指定的 schema。
 - 没有任何 mapped 字段的索引不注册为表。
 - mapping 里的字段全部注册为列；`object` 映射成 Trino 的 `ROW` 类型，可以直接写 `attributes.color`。
-- `nested` 自动映射成 `ARRAY(ROW(...))`。ES 即使只存一个 nested 对象，也按单元素数组读取；多条 nested 对象不会再被误判成单个 `ROW`。
+- `nested` 默认映射成 `ROW(...)`，可以直接写 `address.city`；过滤时会自动生成 ES `nested` query。
+- nested 数组必须通过 `_meta.trino.<字段>.isArray=true` 显式声明，声明后映射成 `ARRAY(ROW(...))`，用 `any_match` 过滤。
 - **`fields` 下的 keyword 子字段注册为独立列**（本插件的补丁）：`text` 字段 `name` 带 `"fields": {"keyword": {"type": "keyword"}}` 时，会同时有 `name` 和 `name.keyword` 两列。列名就是子字段在 Elasticsearch 里的路径，因为带点号，SQL 里必须用双引号。
 - 只有 `type=keyword` 的子字段注册为列。text 等类型的子字段没有 doc value，取不到值，直接忽略——要把子字段当列用，子字段类型必须是 keyword。
 - 子字段列的 `isArray` 默认继承父字段：父字段是数组（`_meta.trino.<字段>.isArray=true`），它的 keyword 子字段列也是数组；需要单独控制时用 `_meta.trino["<父字段>.<子字段>"].isArray` 覆盖。
@@ -520,11 +521,18 @@ SELECT "name.keyword", COUNT(*) FROM fs_es.default.demo_products GROUP BY "name.
   "mappings": {
     "properties": {
       "tags": {"type": "keyword"},
+      "addresses": {
+        "type": "nested",
+        "properties": {
+          "city": {"type": "keyword"}
+        }
+      },
       "attributes": {"type": "object"}
     },
     "_meta": {
       "trino": {
         "tags": {"isArray": true},
+        "addresses": {"isArray": true},
         "attributes": {"asRawJson": true}
       }
     }
@@ -532,13 +540,18 @@ SELECT "name.keyword", COUNT(*) FROM fs_es.default.demo_products GROUP BY "name.
 }
 ```
 
-- `isArray: true`：该字段按数组返回（`array(varchar)` 等）。`nested` 字段始终是数组，不需要也不能通过该选项重复包一层。
+- `isArray: true`：该字段按数组返回（`array(varchar)` 等）。nested 数组也必须显式设置该选项。
 - `asRawJson: true`：该列不展开成 `ROW`，直接返回 `_source` 里的 JSON 原文（`varchar`）。
 
-nested 字段可以用 `UNNEST` 逐条展开，或用 `any_match` 保持同一 nested 对象内的条件关联：
+nested 标量直接使用 ROW 字段路径过滤；nested 数组使用 `UNNEST` 展开，或用 `any_match` 保持同一 nested 对象内的条件关联：
 
 ```sql
--- addresses 是 nested，类型为 array(row(city varchar, zip integer))
+-- 未设置 isArray 的 nested 映射为 row(city varchar, zip integer)
+SELECT id
+FROM fs_es.default.orders
+WHERE address.city = 'Beijing';
+
+-- addresses 设置了 isArray=true，类型为 array(row(city varchar, zip integer))
 SELECT id, address.city, address.zip
 FROM fs_es.default.orders
 CROSS JOIN UNNEST(addresses) AS t(address);
@@ -549,7 +562,9 @@ FROM fs_es.default.orders
 WHERE any_match(addresses, address -> address.city = 'Beijing' AND address.zip > 100000);
 ```
 
-`any_match` 会下推为 Elasticsearch `nested` query，并保持同一 nested 对象内的条件关联。当前支持谓词内的 `AND`、`OR`、`=`、`<>` 和大小比较；无法安全翻译的表达式继续留在 Trino 侧。`UNNEST` 后的过滤暂不做额外下推。
+标量 nested 的 `=`、`IN`、范围和 LIKE 会包进 ES `nested` query 后下推。数组 nested 的 `any_match` 会下推，并保持同一 nested 对象内的条件关联；当前支持谓词内的 `AND`、`OR`、`=`、`<>` 和大小比较。无法安全翻译的表达式继续留在 Trino 侧，`UNNEST` 后的过滤暂不做额外下推。
+
+`index=false`、keyword `ignore_above`、keyword `normalizer` 等会影响索引值与 `_source` 值一致性的 mapping 会自动关闭对应谓词下推，避免 ES 查询产生假阴性。
 
 ### 隐藏列
 
@@ -597,8 +612,7 @@ SELECT * FROM fs_es.system.nodes;
 | `binary` | `varbinary` |
 | `date`（没有自定义 `format`） | `timestamp(3)` |
 | `object` | `ROW(...)`（`_meta.trino.<字段>.asRawJson=true` 时改为 `varchar` 的 JSON 原文） |
-| `nested` | `ARRAY(ROW(...))`（`_meta.trino.<字段>.asRawJson=true` 时改为 `varchar` 的 JSON 原文；nested 对象本身不能再用 `isArray` 包一层） |
-| `_meta.trino.<字段>.isArray=true` 的字段 | `array(...)` |
+| `nested` | 默认 `ROW(...)`；`_meta.trino.<字段>.isArray=true` 时为 `ARRAY(ROW(...))`；`asRawJson=true` 时为 JSON 原文 `varchar` |
 | keyword 子字段（`父字段.keyword`） | `varchar`（本插件的补丁） |
 
 其余类型（`date` 带自定义 `format`、`alias`、`join`、`percolator`、`completion`、`dense_vector`、`flattened`、`date_nanos` 等）不注册为列，索引里其余字段照常可查。
@@ -618,13 +632,14 @@ SELECT * FROM fs_es.system.nodes;
 
 ## 与官方 elasticsearch 连接器的差异
 
-`fs_elasticsearch` 就是官方连接器（vendored 源码 + 7 个官方文件的补丁），差异是：mapping 里 `fields` 下的 keyword 子字段会多出独立列（例如 `name.keyword`），text 字段的 `LIKE '%literal%'` 会下推为 `match_phrase`，nested mapping 会按对象数组完整读取，以及 nested `any_match` 会下推为 ES `nested` query。
+`fs_elasticsearch` 就是官方连接器（vendored 源码 + 9 个官方文件的补丁），差异是：mapping 里 `fields` 下的 keyword 子字段会多出独立列（例如 `name.keyword`），text 字段的 `LIKE '%literal%'` 会下推为 `match_phrase`，nested 标量/数组按 `_meta.trino.isArray` 映射，以及 nested 过滤会生成正确的 ES `nested` query。
 
 | | `fs_elasticsearch` | 官方 `elasticsearch` |
 | --- | --- | --- |
 | keyword 子字段作为独立列（`name.keyword`） | 支持 | 不支持（解析 mapping 时忽略 `fields`，值只从 `_source` 取） |
 | text 字段 `LIKE '%literal%'` 下推为 `match_phrase` | 支持 | 不支持（留在 Trino 侧过滤） |
-| nested 对象数组（`ARRAY(ROW(...))`） | 支持 | 官方把 `nested` 当成 `ROW`，多条 nested 对象读取时会报类型不匹配 |
+| nested 标量 `ROW(...)` 及直接字段过滤 | 支持 | 能投影为 ROW，但直接点路径谓词不会包 nested query |
+| `_meta.trino.isArray=true` 的 nested 数组 | 支持 | 不支持可靠读取多条 nested 对象 |
 | `any_match(ARRAY(ROW(...)), row -> ...)` 下推 | 支持 | 不支持 |
 | 其余能力（配置项、隐藏列、其他谓词下推、并行读、`count(*)`、`raw_query`、`nodes`、`_meta.trino`、认证方式） | 相同 | 相同 |
 

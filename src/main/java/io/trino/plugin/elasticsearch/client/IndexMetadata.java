@@ -29,8 +29,13 @@ public record IndexMetadata(ObjectType schema)
         requireNonNull(schema, "schema is null");
     }
 
-    public record Field(boolean asRawJson, boolean isArray, String name, Type type)
+    public record Field(boolean asRawJson, boolean isArray, String name, Type type, boolean supportsPredicates)
     {
+        public Field(boolean asRawJson, boolean isArray, String name, Type type)
+        {
+            this(asRawJson, isArray, name, type, true);
+        }
+
         public Field
         {
             checkArgument(
@@ -47,7 +52,7 @@ public record IndexMetadata(ObjectType schema)
             property = "@type")
     @JsonSubTypes({
             @JsonSubTypes.Type(value = DateTimeType.class, name = "date_time"),
-            // PATCH(fs-trino): preserve Elasticsearch nested mappings so they can be exposed as ARRAY(ROW(...))
+            // PATCH(fs-trino): preserve Elasticsearch nested mappings so they can be exposed as ROW/ARRAY(ROW(...))
             @JsonSubTypes.Type(value = NestedType.class, name = "nested"),
             @JsonSubTypes.Type(value = ObjectType.class, name = "object"),
             @JsonSubTypes.Type(value = PrimitiveType.class, name = "primitive"),
@@ -86,8 +91,8 @@ public record IndexMetadata(ObjectType schema)
         }
     }
 
-    // PATCH(fs-trino): Elasticsearch nested documents retain object boundaries and are always represented as an
-    // array by the connector. Keeping a distinct type prevents them from being mistaken for a single object.
+    // PATCH(fs-trino): Preserve Elasticsearch nested documents as a distinct type so metadata can map them to ROW or,
+    // when _meta.trino.isArray=true, to ARRAY(ROW(...)).
     public record NestedType(List<Field> fields)
             implements Type
     {

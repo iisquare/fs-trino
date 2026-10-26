@@ -58,13 +58,29 @@ public class RowDecoder
             ((RowBlockBuilder) output).buildEntry(fieldBuilders -> {
                 for (int i = 0; i < decoders.size(); i++) {
                     String field = fieldNames.get(i);
-                    decoders.get(i).decode(document, () -> getField((Map<String, Object>) data, field), fieldBuilders.get(i));
+                    decoders.get(i).decode(document, () -> getFieldWithMultiFieldFallback((Map<String, Object>) data, field), fieldBuilders.get(i));
                 }
             });
         }
         else {
             throw new TrinoException(TYPE_MISMATCH, format("Expected object for field '%s' of type ROW: %s [%s]", path, data, data.getClass().getSimpleName()));
         }
+    }
+
+    private static Object getFieldWithMultiFieldFallback(Map<String, Object> data, String field)
+    {
+        Object value = getField(data, field);
+        if (value != null) {
+            return value;
+        }
+
+        // PATCH(fs-trino): Keyword multi-fields such as name.keyword are copies of their parent and do not exist as
+        // separate keys in _source. Fall back to the parent value when decoding a ROW from the document source.
+        int separator = field.lastIndexOf('.');
+        if (separator > 0) {
+            return getField(data, field.substring(0, separator));
+        }
+        return null;
     }
 
     public static class Descriptor

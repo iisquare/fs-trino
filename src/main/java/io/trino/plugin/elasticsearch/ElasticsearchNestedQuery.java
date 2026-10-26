@@ -13,16 +13,25 @@
  */
 package io.trino.plugin.elasticsearch;
 
+import com.google.common.collect.ImmutableList;
+
+import java.util.List;
+
 import static java.util.Objects.requireNonNull;
 
-// PATCH(fs-trino): a translated any_match predicate. The path is the Elasticsearch nested path and the query is the
-// predicate to apply inside that path. Keeping this on the table handle makes the pushdown visible in EXPLAIN and
-// allows it to be serialized to workers with the rest of the connector handle.
-public record ElasticsearchNestedQuery(String path, String query)
+// PATCH(fs-trino): a translated nested predicate. The paths are ordered from the outermost nested path to the
+// innermost path, and query is the predicate to apply inside them.
+public record ElasticsearchNestedQuery(List<String> paths, String query)
 {
+    public ElasticsearchNestedQuery(String path, String query)
+    {
+        this(List.of(path), query);
+    }
+
     public ElasticsearchNestedQuery
     {
-        requireNonNull(path, "path is null");
+        requireNonNull(paths, "paths is null");
+        paths = ImmutableList.copyOf(paths);
         requireNonNull(query, "query is null");
     }
 }

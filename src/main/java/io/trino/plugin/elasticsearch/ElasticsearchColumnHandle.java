@@ -29,15 +29,39 @@ public record ElasticsearchColumnHandle(
         Type type,
         IndexMetadata.Type elasticsearchType,
         DecoderDescriptor decoderDescriptor,
-        boolean supportsPredicates)
+        boolean supportsPredicates,
+        List<String> nestedPaths,
+        boolean mappingSupportsPredicates)
         implements ColumnHandle
 {
+    public ElasticsearchColumnHandle(
+            List<String> path,
+            Type type,
+            IndexMetadata.Type elasticsearchType,
+            DecoderDescriptor decoderDescriptor,
+            boolean supportsPredicates)
+    {
+        this(path, type, elasticsearchType, decoderDescriptor, supportsPredicates, ImmutableList.of(), true);
+    }
+
+    public ElasticsearchColumnHandle(
+            List<String> path,
+            Type type,
+            IndexMetadata.Type elasticsearchType,
+            DecoderDescriptor decoderDescriptor,
+            boolean supportsPredicates,
+            List<String> nestedPaths)
+    {
+        this(path, type, elasticsearchType, decoderDescriptor, supportsPredicates, nestedPaths, true);
+    }
+
     public ElasticsearchColumnHandle
     {
         path = ImmutableList.copyOf(path);
         requireNonNull(type, "type is null");
         requireNonNull(elasticsearchType, "elasticsearchType is null");
         requireNonNull(decoderDescriptor, "decoderDescriptor is null");
+        nestedPaths = ImmutableList.copyOf(nestedPaths);
     }
 
     @JsonIgnore

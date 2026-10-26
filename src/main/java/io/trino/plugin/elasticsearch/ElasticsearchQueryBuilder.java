@@ -64,7 +64,6 @@ public final class ElasticsearchQueryBuilder
             List<ElasticsearchNestedQuery> nestedQueries)
     {
         ArrayNode filterClauses = JSON.arrayNode();
-        ArrayNode mustNotClauses = JSON.arrayNode();
         ArrayNode mustClauses = JSON.arrayNode();
 
         if (constraint.getDomains().isPresent()) {
@@ -74,7 +73,7 @@ public final class ElasticsearchQueryBuilder
 
                 checkArgument(!domain.isNone(), "Unexpected NONE domain for %s", column.name());
                 if (!domain.isAll()) {
-                    addPredicateToClauses(filterClauses, mustNotClauses, column.name(), domain, column.type());
+                    filterClauses.add(wrapNested(domainQuery(column.name(), domain, column.type()), column.nestedPaths()));
                 }
             }
         }
@@ -87,17 +86,22 @@ public final class ElasticsearchQueryBuilder
         // PATCH(fs-trino): text-column LIKE '%literal%' is pushed down as match_phrase
         phrases.forEach((name, value) -> filterClauses.add(matchPhraseQuery(name, value)));
 
-        // PATCH(fs-trino): any_match over an ARRAY(ROW(...)) is pushed down as an Elasticsearch nested query.
+        // PATCH(fs-trino): nested scalar predicates and any_match over an ARRAY(ROW(...)) are pushed down as
+        // Elasticsearch nested queries.
         for (ElasticsearchNestedQuery nestedQuery : nestedQueries) {
-            ObjectNode nested = JSON.objectNode();
-            nested.put("path", nestedQuery.path());
-            nested.set("query", parseQuery(nestedQuery.query()));
-            filterClauses.add(JSON.objectNode().set("nested", nested));
+            JsonNode nestedQueryNode = parseQuery(nestedQuery.query());
+            for (int i = nestedQuery.paths().size() - 1; i >= 0; i--) {
+                ObjectNode nested = JSON.objectNode();
+                nested.put("path", nestedQuery.paths().get(i));
+                nested.set("query", nestedQueryNode);
+                nestedQueryNode = JSON.objectNode().set("nested", nested);
+            }
+            filterClauses.add(nestedQueryNode);
         }
 
         query.ifPresent(q -> mustClauses.add(queryStringQuery(q)));
 
-        if (filterClauses.isEmpty() && mustNotClauses.isEmpty() && mustClauses.isEmpty()) {
+        if (filterClauses.isEmpty() && mustClauses.isEmpty()) {
             return matchAllQuery();
         }
 
@@ -105,42 +109,49 @@ public final class ElasticsearchQueryBuilder
         if (!filterClauses.isEmpty()) {
             boolNode.set("filter", filterClauses);
         }
-        if (!mustNotClauses.isEmpty()) {
-            boolNode.set("must_not", mustNotClauses);
-        }
         if (!mustClauses.isEmpty()) {
             boolNode.set("must", mustClauses);
         }
         return JSON.objectNode().set("bool", boolNode);
     }
 
-    private static void addPredicateToClauses(ArrayNode filterClauses, ArrayNode mustNotClauses, String columnName, Domain domain, Type type)
+    private static JsonNode domainQuery(String columnName, Domain domain, Type type)
     {
         checkArgument(domain.getType().isOrderable(), "Domain type must be orderable");
 
         if (domain.getValues().isNone()) {
-            mustNotClauses.add(existsQuery(columnName));
-            return;
+            ObjectNode bool = boolQuery();
+            bool.set("must_not", JSON.arrayNode().add(existsQuery(columnName)));
+            return JSON.objectNode().set("bool", bool);
         }
 
         if (domain.getValues().isAll()) {
-            filterClauses.add(existsQuery(columnName));
-            return;
+            return existsQuery(columnName);
         }
 
         List<JsonNode> shouldClauses = getShouldClauses(columnName, domain, type);
         if (shouldClauses.size() == 1) {
-            filterClauses.add(getOnlyElement(shouldClauses));
-            return;
+            return getOnlyElement(shouldClauses);
         }
         if (shouldClauses.size() > 1) {
             ObjectNode boolNode = boolQuery();
             ArrayNode shouldArray = JSON.arrayNode();
             shouldClauses.forEach(shouldArray::add);
             boolNode.set("should", shouldArray);
-            filterClauses.add(JSON.objectNode().set("bool", boolNode));
-            return;
+            return JSON.objectNode().set("bool", boolNode);
         }
+        throw new IllegalArgumentException("Unsupported domain for column " + columnName);
+    }
+
+    private static JsonNode wrapNested(JsonNode query, List<String> nestedPaths)
+    {
+        for (int i = nestedPaths.size() - 1; i >= 0; i--) {
+            ObjectNode nested = JSON.objectNode();
+            nested.put("path", nestedPaths.get(i));
+            nested.set("query", query);
+            query = JSON.objectNode().set("nested", nested);
+        }
+        return query;
     }
 
     private static List<JsonNode> getShouldClauses(String columnName, Domain domain, Type type)
@@ -233,14 +244,14 @@ public final class ElasticsearchQueryBuilder
                 JSON.objectNode().set(field, toJsonValue(value)));
     }
 
-    private static ObjectNode regexpQuery(String field, String value)
+    static ObjectNode regexpQuery(String field, String value)
     {
         return JSON.objectNode().set(
                 "regexp",
                 JSON.objectNode().put(field, value));
     }
 
-    private static ObjectNode matchPhraseQuery(String field, String value)
+    static ObjectNode matchPhraseQuery(String field, String value)
     {
         return JSON.objectNode().set(
                 "match_phrase",

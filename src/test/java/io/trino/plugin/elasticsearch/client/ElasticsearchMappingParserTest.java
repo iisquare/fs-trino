@@ -19,7 +19,9 @@ import com.fasterxml.jackson.databind.node.NullNode;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ElasticsearchMappingParserTest
 {
@@ -55,6 +57,7 @@ class ElasticsearchMappingParserTest
         IndexMetadata.NestedType nestedType = assertInstanceOf(IndexMetadata.NestedType.class, addresses.type());
         assertEquals(2, nestedType.fields().size());
         assertEquals("city", nestedType.fields().get(0).name());
+        assertTrue(nestedType.fields().get(0).supportsPredicates());
         assertInstanceOf(IndexMetadata.PrimitiveType.class, nestedType.fields().get(0).type());
         assertEquals(
                 nestedType,
@@ -63,5 +66,23 @@ class ElasticsearchMappingParserTest
         IndexMetadata.Field attributes = schema.fields().get(1);
         assertEquals("attributes", attributes.name());
         assertInstanceOf(IndexMetadata.ObjectType.class, attributes.type());
+    }
+
+    @Test
+    void testUnsafeKeywordMappingsDisablePredicatePushdown()
+            throws Exception
+    {
+        JsonNode properties = OBJECT_MAPPER.readTree("""
+                {
+                  "not_indexed": {"type": "keyword", "index": false},
+                  "too_long": {"type": "keyword", "ignore_above": 256},
+                  "normalized": {"type": "keyword", "normalizer": "lowercase"}
+                }
+                """);
+
+        IndexMetadata.ObjectType schema = ElasticsearchClient.parseType(properties, NullNode.getInstance());
+
+        assertEquals(3, schema.fields().size());
+        schema.fields().forEach(field -> assertFalse(field.supportsPredicates(), field.name()));
     }
 }

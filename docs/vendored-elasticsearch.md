@@ -1,6 +1,6 @@
 # 官方 elasticsearch 源码（vendored）与补丁清单
 
-`fs_elasticsearch` 的主体是 **官方 483 tag 的 `plugin/trino-elasticsearch` 源码**，原样收在本仓库里，只在 keyword 子字段（multi-field）、text 字段 `LIKE '%...%'` 短语下推、nested 对象数组和 `any_match` nested 下推这几部分打了补丁，共涉及 7 个官方文件。其余官方功能、配置项和类型映射保持原样。
+`fs_elasticsearch` 的主体是 **官方 483 tag 的 `plugin/trino-elasticsearch` 源码**，原样收在本仓库里，只在 keyword 子字段（multi-field）、text 字段 `LIKE '%...%'` 短语下推、nested 标量/数组映射及 nested 谓词下推这几部分打了补丁，共涉及 9 个官方文件。其余官方功能、配置项和类型映射保持原样。
 
 | 项 | 值 |
 | --- | --- |
@@ -8,8 +8,8 @@
 | 上游文件 | 52 个（`src/main/java`，不含官方测试代码） |
 | 本仓库新增 | 4 个：`FsElasticsearchConnectorFactory`、`FsElasticsearchPlugin`、`ElasticsearchNestedPredicateTranslator`、`ElasticsearchNestedQuery` |
 | 落点 | `src/main/java/io/trino/plugin/elasticsearch/` |
-| 与上游不一致的文件 | 7 个，全部带 `// PATCH(fs-trino)` 注释 |
-| 校验 | `sha256sum -c docs/vendored-elasticsearch.sha256`（45 个未改动文件逐个与上游比 sha256） |
+| 与上游不一致的文件 | 9 个，全部带 `// PATCH(fs-trino)` 注释 |
+| 校验 | `sha256sum -c docs/vendored-elasticsearch.sha256`（43 个未改动文件逐个与上游比 sha256） |
 | 编译依赖 | 全部来自 Maven Central，版本按官方 483 的 `pom.xml` 锁定，见 `build.gradle` |
 
 构建不需要 docker、不需要官方镜像。
@@ -18,11 +18,11 @@
 
 483 的 `io.trino:trino-elasticsearch` **没有发布到 Maven Central**（该坐标只发布到 476，可对比 <https://repo1.maven.org/maven2/io/trino/trino-elasticsearch/>），拿不到编译产物。
 
-更关键的是：vendored 之后补丁类和官方类在同一个 package、同一个 classloader 里，可以直接用包私有成员。这是补丁能集中在 7 个文件的原因——例如 `IndexMetadata` 的内部类型（`PrimitiveType` / `ScaledFloatType` / `ObjectType`）和 `ScanQueryPageSource` 的解码流程本来都是包私有、public API 里看不见的。若改成在外部依赖的官方 jar 上做包装，只能用 public API，改动面会大得多，正是要避免的。
+更关键的是：vendored 之后补丁类和官方类在同一个 package、同一个 classloader 里，可以直接用包私有成员。这是补丁能集中在 9 个文件的原因——例如 `IndexMetadata` 的内部类型（`PrimitiveType` / `ScaledFloatType` / `ObjectType`）和 `ScanQueryPageSource` 的解码流程本来都是包私有、public API 里看不见的。若改成在外部依赖的官方 jar 上做包装，只能用 public API，改动面会大得多，正是要避免的。
 
 ## 补丁清单
 
-只有这 7 个文件与上游不同。`grep -rn 'PATCH(fs-trino)' src/main/java` 可以一次看全。
+只有这 9 个官方文件与上游不同。`grep -rn 'PATCH(fs-trino)' src/main/java` 可以一次看全。
 
 ### 1. `client/IndexMetadata.java` — 新增列类型标记
 
@@ -30,7 +30,7 @@
 
 列句柄要在 coordinator 序列化、在 worker 反序列化，所以多出来的列类型必须能过 Jackson。走 `@JsonSubTypes` 而不是自定义 serializer，是为了不动上游的序列化路径。
 
-`NestedType` 不能继续复用 `ObjectType`：ES 的 nested 值保留对象边界，通常是对象数组；只有单独保留 nested 类型，元数据层才能稳定映射成 `ARRAY(ROW(...))`。
+`NestedType` 不能继续复用 `ObjectType`：只有单独保留 nested 类型，元数据层才能区分默认 `ROW(...)` 和 `_meta.trino.isArray=true` 时的 `ARRAY(ROW(...))`，并在投影叶子列时保留 nested 路径。
 
 ### 2. `client/ElasticsearchClient.java` — 解析子字段和 nested mapping（`parseType`）
 
@@ -47,8 +47,8 @@
 
 - `MultiFieldType` → `varchar` + `VarcharDecoder`（走 `document.fields()`，见补丁 4）。
 - `supportsPredicates`：keyword 子字段与 keyword 字段同等对待。Elasticsearch 接受点号路径做 `term` / `range` / `regexp` 查询，所以 `WHERE "name.keyword" = 'x'` 依然会被下推成 ES 查询，而不是拿回来在 Trino 里过滤。
-- `NestedType` → `ARRAY(ROW(...))` + `ArrayDecoder(RowDecoder)`。无论 ES 保存的是一个对象还是对象数组，都按数组读取，且 `_meta.trino.<字段>.isArray=true` 不会重复包成二维数组。
-- nested 的叶子谓词不做普通点路径下推，避免绕过 ES 的 `nested` query 语义。
+- `NestedType` 默认 → `ROW(...)` + `RowDecoder`；`_meta.trino.<字段>.isArray=true` 时 → `ARRAY(ROW(...))` + `ArrayDecoder(RowDecoder)`。
+- 非数组 nested 的叶子列在 `ElasticsearchColumnHandle` 中携带完整 nested 路径。普通 `term`、`range`、`regexp`、`match_phrase` 下推时由查询构建器从内到外包装 ES `nested` query。
 - `any_match(ARRAY(ROW(...)), row -> predicate)` 进入第 6 节专门翻译；`UNNEST` 后的过滤暂不额外下推。
 
 ### 4. `ScanQueryPageSource.java` — 从 `fields` 取值，而不是 `_source`
@@ -66,13 +66,15 @@
 
 `match_phrase` 使用字段的 search analyzer，和字符子串语义的 `LIKE` 并不等价；这里依赖本环境在 ES 侧的分词/analyzer 插件处理短语语义。
 
-### 6. `any_match(ARRAY(ROW(...)), row -> predicate)` → ES `nested` query
+### 6. nested 标量谓词和 `any_match(ARRAY(ROW(...)), row -> predicate)` → ES `nested` query
 
-- `ElasticsearchMetadata.java`：`applyFilter` 识别 `any_match`，调用新增的 `ElasticsearchNestedPredicateTranslator`。翻译成功后才把该表达式从 Trino 剩余过滤条件中移除。
+- `ElasticsearchColumnHandle.java` / `ElasticsearchMetadata.java`：投影穿过非数组 `NestedType` 时，在列句柄中记录从外到内的 nested 路径；`applyFilter` 识别数组 nested 上的 `any_match`，调用新增的 `ElasticsearchNestedPredicateTranslator`。翻译成功后才把该表达式从 Trino 剩余过滤条件中移除。
 - `ElasticsearchNestedPredicateTranslator.java`：沿 lambda 参数解析 `ROW` 子字段路径，生成 `{"nested":{"path":"父字段","query":...}}`。同一个 `any_match` 内的 `AND` 会放进同一个 nested query，因此多个条件必须由同一条 nested 对象满足；`OR` 使用 nested query 内的 `should + minimum_should_match=1`。
 - 支持 `=`、`<>` 和大小比较。`<>` 同时要求字段存在，避免把 SQL 的 `NULL` 结果误判为 true。text、scaled_float 等不适合直接 `term`/`range` 的字段保持 Trino 侧过滤。
-- `ElasticsearchNestedQuery.java` 和 `ElasticsearchTableHandle.java`：已翻译的 nested query 随表句柄序列化到 worker，并在 `EXPLAIN` 中显示在 `nestedQueries` 下。
+- mapping 中的 `index=false`、keyword `ignore_above`、keyword `normalizer` 会使索引值与 `_source` 不一致，因此对应字段标记为不可下推。该标记同时用于普通嵌套叶子和 `any_match`。
+- `ElasticsearchNestedQuery.java` 和 `ElasticsearchTableHandle.java`：已翻译的 nested query 随表句柄序列化到 worker，并在 `EXPLAIN` 中显示在 `nestedQueries` 下。查询可在多层 nested 路径上从内到外包装。
 - `ElasticsearchQueryBuilder.java`、`ScanQueryPageSource.java`、`CountQueryPageSource.java`：普通扫描和 `count(*)` 使用同一组 nested 过滤条件。
+- `decoders/RowDecoder.java`：ROW 内 keyword multi-field（如 `city.keyword`）在 `_source` 中没有独立键时回退到父字段值，避免读取整个 nested ROW 时该子字段恒为 `NULL`。
 
 多个顶层 `any_match` 条件会被翻译成多个独立 `nested` query，各自可以匹配不同的 nested 对象，和 Trino 对多个 `any_match` 的 AND 语义一致。
 
@@ -129,18 +131,18 @@ cd /tmp && rm -rf dupcheck && mkdir dupcheck && cd dupcheck &&
 
 配置项（`elasticsearch.*` 全部属性）、隐藏列 `_id` / `_source` / `_score`、除 nested 外的类型映射、除第 5 节之外的其他谓词下推、按 shard 并行读、`count(*)` 走 count API、`raw_query` 表函数、`nodes` 系统表、`_meta.trino` 的 `isArray` / `asRawJson`、认证方式（`PASSWORD` / `AWS` / keystore / truststore）。
 
-## 怎么确认"只有这 7 处"
+## 怎么确认"只有这 9 处"
 
 ```bash
 grep -rn 'PATCH(fs-trino)' src/main/java
-sha256sum -c docs/vendored-elasticsearch.sha256    # 未改动的 45 个文件必须全是 OK
+sha256sum -c docs/vendored-elasticsearch.sha256    # 未改动的 43 个文件必须全是 OK
 git diff --stat <上一次同步上游的 commit> -- src/main/java/io/trino/plugin/elasticsearch
 ```
 
 ## 升级 Trino 版本
 
-1. 取新 tag 的官方源码，覆盖 `src/main/java/io/trino/plugin/elasticsearch/`（保留本仓库新增的 `FsElasticsearchConnectorFactory` / `FsElasticsearchPlugin`，以及 7 个文件里的 `PATCH(fs-trino)`）。源码可整份 clone 到本地，也可以按文件从 `https://raw.githubusercontent.com/trinodb/trino/<tag>/plugin/trino-elasticsearch/src/main/java/io/trino/plugin/elasticsearch/<相对路径>` 取。
-2. 对照上面的补丁清单，确认 7 个文件的上下文没有漂移（官方若重构过 `parseType` / `ScanQueryPageSource` / LIKE 下推，补丁要跟着改）。
+1. 取新 tag 的官方源码，覆盖 `src/main/java/io/trino/plugin/elasticsearch/`（保留本仓库新增的 `FsElasticsearchConnectorFactory` / `FsElasticsearchPlugin`，以及 9 个文件里的 `PATCH(fs-trino)`）。源码可整份 clone 到本地，也可以按文件从 `https://raw.githubusercontent.com/trinodb/trino/<tag>/plugin/trino-elasticsearch/src/main/java/io/trino/plugin/elasticsearch/<相对路径>` 取。
+2. 对照上面的补丁清单，确认 9 个文件的上下文没有漂移（官方若重构过 `parseType` / `ScanQueryPageSource` / LIKE 下推，补丁要跟着改）。
 3. 同步 `build.gradle` 里 ES rest-client、AWS SDK、airlift 的版本——新 tag 的 `plugin/trino-elasticsearch/pom.xml` 里锁着这些版本号。顺带确认两件容易丢的东西还在：`compileJava` 的 `-parameters`，以及打包的两条排除（guice 用 `classes` classifier、排除 `commons-logging`），见上方两节。
 4. 重新生成校验清单：`docs/vendored-elasticsearch.sha256`（换 tag 后 sha256 全变），生成方式见文件头注释。
 5. 跑验收：`gradle clean build`，再按 README 的验收 SQL 在本地 Trino 上过一遍（重点跑 keyword 子字段列、nested 对象数组的查询与 `DESCRIBE`）。

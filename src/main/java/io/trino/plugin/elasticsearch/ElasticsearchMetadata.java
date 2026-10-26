@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.elasticsearch;
 
+import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -277,7 +278,9 @@ public class ElasticsearchMetadata
                     converted.type(),
                     field.type(),
                     converted.decoderDescriptor(),
-                    supportsPredicates(field.type(), converted.type)));
+                    supportsPredicates(field.type(), converted.type()) && field.supportsPredicates(),
+                    ImmutableList.of(),
+                    field.supportsPredicates()));
         }
 
         return result.buildOrThrow();
@@ -299,12 +302,15 @@ public class ElasticsearchMetadata
         }
 
         IndexMetadata.Type type = field.type();
-        // PATCH(fs-trino): nested documents preserve object boundaries and are always a collection. Map them to an
-        // array of rows even when Elasticsearch stores a single object or _meta.trino accidentally sets isArray=true.
+        // PATCH(fs-trino): nested documents preserve object boundaries. Map them to ROW by default and to
+        // ARRAY(ROW(...)) only when _meta.trino.isArray=true.
         if (type instanceof NestedType nestedType) {
             TypeAndDecoder row = toTrinoRow(path, nestedType.fields());
             if (row != null) {
-                return new TypeAndDecoder(new ArrayType(row.type()), new ArrayDecoder.Descriptor(row.decoderDescriptor()));
+                if (field.isArray()) {
+                    return new TypeAndDecoder(new ArrayType(row.type()), new ArrayDecoder.Descriptor(row.decoderDescriptor()));
+                }
+                return row;
             }
             return null;
         }
@@ -553,7 +559,9 @@ public class ElasticsearchMetadata
         for (Entry<ColumnHandle, Domain> entry : domains.entrySet()) {
             ElasticsearchColumnHandle column = (ElasticsearchColumnHandle) entry.getKey();
 
-            if (column.supportsPredicates()) {
+            if (column.supportsPredicates() &&
+                    column.mappingSupportsPredicates() &&
+                    (column.nestedPaths().isEmpty() || !entry.getValue().isNullAllowed())) {
                 supported.put(column, entry.getValue());
             }
             else {
@@ -594,19 +602,29 @@ public class ElasticsearchMetadata
                     }
 
                     if (pattern instanceof Slice slice) {
-                        IndexMetadata metadata = client.getIndexMetadata(handle.index());
-                        Optional<IndexMetadata.Type> fieldType = metadata.schema().fields().stream()
-                                .filter(field -> columnName.equals(field.name()))
-                                .map(IndexMetadata.Field::type)
-                                .findFirst();
-                        if (fieldType.isPresent() && !newRegexes.containsKey(columnName) && isKeywordType(fieldType.get())) {
-                            newRegexes.put(columnName, likeToRegexp(slice, escape));
+                        if (!newRegexes.containsKey(columnName) && column.mappingSupportsPredicates() && isKeywordType(column.elasticsearchType())) {
+                            String regex = likeToRegexp(slice, escape);
+                            if (column.nestedPaths().isEmpty()) {
+                                newRegexes.put(columnName, regex);
+                            }
+                            else {
+                                newNestedQueries.add(new ElasticsearchNestedQuery(
+                                        column.nestedPaths(),
+                                        ElasticsearchQueryBuilder.regexpQuery(columnName, regex).toString()));
+                            }
                             continue;
                         }
-                        if (fieldType.isPresent() && !newPhrases.containsKey(columnName) && isTextType(fieldType.get())) {
+                        if (!newPhrases.containsKey(columnName) && column.mappingSupportsPredicates() && isTextType(column.elasticsearchType())) {
                             Optional<String> phrase = likeToPhrase(slice, escape);
                             if (phrase.isPresent()) {
-                                newPhrases.put(columnName, phrase.get());
+                                if (column.nestedPaths().isEmpty()) {
+                                    newPhrases.put(columnName, phrase.get());
+                                }
+                                else {
+                                    newNestedQueries.add(new ElasticsearchNestedQuery(
+                                            column.nestedPaths(),
+                                            ElasticsearchQueryBuilder.matchPhraseQuery(columnName, phrase.get()).toString()));
+                                }
                                 continue;
                             }
                         }
@@ -864,23 +882,35 @@ public class ElasticsearchMetadata
             return baseColumn;
         }
         ImmutableList.Builder<String> path = ImmutableList.builder();
+        ImmutableList.Builder<String> nestedPaths = ImmutableList.builder();
         path.addAll(baseColumn.path());
+        nestedPaths.addAll(baseColumn.nestedPaths());
 
         DecoderDescriptor decoderDescriptor = baseColumn.decoderDescriptor();
         IndexMetadata.Type elasticsearchType = baseColumn.elasticsearchType();
         Type type = baseColumn.type();
+        boolean mappingSupportsPredicates = baseColumn.mappingSupportsPredicates();
 
         for (int index : indices) {
             verify(type instanceof RowType, "type should be Row type");
             RowType rowType = (RowType) type;
             RowType.Field field = rowType.getFields().get(index);
-            path.add(field.getName()
-                    .orElseThrow(() -> new TrinoException(NOT_SUPPORTED, "ROW type does not have field name declared: " + rowType)));
+            if (elasticsearchType instanceof NestedType) {
+                nestedPaths.add(Joiner.on('.').join(path.build()));
+            }
+            String fieldName = field.getName()
+                    .orElseThrow(() -> new TrinoException(NOT_SUPPORTED, "ROW type does not have field name declared: " + rowType));
+            path.add(fieldName);
             type = field.getType();
 
             verify(decoderDescriptor instanceof RowDecoder.Descriptor, "decoderDescriptor should be RowDecoder.Descriptor type");
             decoderDescriptor = ((RowDecoder.Descriptor) decoderDescriptor).getFields().get(index).getDescriptor();
-            elasticsearchType = ((IndexMetadata.ObjectType) elasticsearchType).fields().get(index).type();
+            IndexMetadata.Field elasticsearchField = objectFields(elasticsearchType).stream()
+                    .filter(metadataField -> metadataField.name().equals(fieldName))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalStateException("Missing Elasticsearch field metadata for " + fieldName));
+            elasticsearchType = elasticsearchField.type();
+            mappingSupportsPredicates = elasticsearchField.supportsPredicates();
         }
 
         return new ElasticsearchColumnHandle(
@@ -888,7 +918,20 @@ public class ElasticsearchMetadata
                 projectedColumnType,
                 elasticsearchType,
                 decoderDescriptor,
-                supportsPredicates(elasticsearchType, projectedColumnType));
+                supportsPredicates(elasticsearchType, projectedColumnType) && mappingSupportsPredicates,
+                nestedPaths.build(),
+                mappingSupportsPredicates);
+    }
+
+    private static List<IndexMetadata.Field> objectFields(IndexMetadata.Type type)
+    {
+        if (type instanceof ObjectType objectType) {
+            return objectType.fields();
+        }
+        if (type instanceof NestedType nestedType) {
+            return nestedType.fields();
+        }
+        throw new IllegalArgumentException("Expected object type, got " + type);
     }
 
     @Override

@@ -23,6 +23,7 @@ import io.trino.spi.expression.FieldDereference;
 import io.trino.spi.expression.FunctionName;
 import io.trino.spi.expression.Lambda;
 import io.trino.spi.expression.Variable;
+import io.trino.spi.predicate.Domain;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.type.ArrayType;
 import io.trino.spi.type.FunctionType;
@@ -104,6 +105,25 @@ class ElasticsearchNestedPredicateTranslatorTest
     }
 
     @Test
+    void testMappingUnsafeNestedFieldIsNotPushedDown()
+    {
+        RowType rowType = addressRowType();
+        ElasticsearchColumnHandle column = nestedAddressColumn(rowType, "keyword", false);
+        Variable nested = new Variable("nested_addresses", new ArrayType(rowType));
+        Variable address = new Variable("address", rowType);
+        Call cityEquals = new Call(
+                BOOLEAN,
+                EQUAL_OPERATOR_FUNCTION_NAME,
+                List.of(
+                        new FieldDereference(VARCHAR, address, 0),
+                        new Constant(Slices.utf8Slice("Beijing"), VARCHAR)));
+
+        assertEquals(
+                Optional.empty(),
+                translate(nested, address, rowType, cityEquals, column));
+    }
+
+    @Test
     void testAnyMatchWithDisjunction()
     {
         RowType rowType = addressRowType();
@@ -147,6 +167,29 @@ class ElasticsearchNestedPredicateTranslatorTest
         assertEquals(nestedQueries, deserialized);
     }
 
+    @Test
+    void testNonArrayNestedFieldDomainIsWrappedAsNestedQuery()
+    {
+        ElasticsearchColumnHandle city = new ElasticsearchColumnHandle(
+                List.of("address", "city"),
+                VARCHAR,
+                new IndexMetadata.PrimitiveType("keyword"),
+                new VarcharDecoder.Descriptor("address.city"),
+                true,
+                List.of("address"));
+        Domain domain = Domain.singleValue(VARCHAR, Slices.utf8Slice("Beijing"));
+
+        assertEquals(
+                "{\"bool\":{\"filter\":[{\"nested\":{\"path\":\"address\",\"query\":{\"term\":{\"address.city\":\"Beijing\"}}}}]}}",
+                ElasticsearchQueryBuilder.buildSearchQuery(
+                        TupleDomain.withColumnDomains(Map.of(city, domain)),
+                        Optional.empty(),
+                        Map.of(),
+                        Map.of(),
+                        List.of())
+                        .toString());
+    }
+
     private static Optional<ElasticsearchNestedQuery> translate(
             Variable nested,
             Variable address,
@@ -174,8 +217,13 @@ class ElasticsearchNestedPredicateTranslatorTest
 
     private static ElasticsearchColumnHandle nestedAddressColumn(RowType rowType, String cityType)
     {
+        return nestedAddressColumn(rowType, cityType, true);
+    }
+
+    private static ElasticsearchColumnHandle nestedAddressColumn(RowType rowType, String cityType, boolean citySupportsPredicates)
+    {
         IndexMetadata.NestedType nestedType = new IndexMetadata.NestedType(List.of(
-                new IndexMetadata.Field(false, false, "city", new IndexMetadata.PrimitiveType(cityType)),
+                new IndexMetadata.Field(false, false, "city", new IndexMetadata.PrimitiveType(cityType), citySupportsPredicates),
                 new IndexMetadata.Field(false, false, "zip", new IndexMetadata.PrimitiveType("long"))));
         return new ElasticsearchColumnHandle(
                 List.of("addresses"),

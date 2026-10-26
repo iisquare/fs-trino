@@ -37,7 +37,7 @@ public record ElasticsearchTableHandle(
         Map<String, String> regexes,
         // PATCH(fs-trino): match_phrase queries pushed down for text-column LIKE '%literal%'
         Map<String, String> phrases,
-        // PATCH(fs-trino): any_match queries pushed down as Elasticsearch nested queries
+        // PATCH(fs-trino): nested scalar predicates and any_match queries pushed down as Elasticsearch nested queries
         List<ElasticsearchNestedQuery> nestedQueries,
         Optional<String> query,
         OptionalLong limit,
@@ -116,7 +116,7 @@ public record ElasticsearchTableHandle(
         if (!nestedQueries.isEmpty()) {
             attributes.append("nestedQueries=[");
             attributes.append(nestedQueries.stream()
-                    .map(nestedQuery -> nestedQuery.path() + ":" + nestedQuery.query())
+                    .map(nestedQuery -> nestedQuery.paths() + ":" + nestedQuery.query())
                     .collect(Collectors.joining(", ")));
             attributes.append("]");
         }

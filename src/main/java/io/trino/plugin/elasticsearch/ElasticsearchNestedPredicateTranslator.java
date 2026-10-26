@@ -83,9 +83,9 @@ final class ElasticsearchNestedPredicateTranslator
             return Optional.empty();
         }
 
-        FieldContext root = new FieldContext(column.name(), rowType, nestedType);
+        FieldContext root = new FieldContext(column.name(), rowType, nestedType, true);
         Optional<JsonNode> predicate = translateBoolean(lambda.getBody(), rowArgument.getName(), root);
-        return predicate.map(query -> new ElasticsearchNestedQuery(column.name(), query.toString()));
+        return predicate.map(query -> new ElasticsearchNestedQuery(List.of(column.name()), query.toString()));
     }
 
     private static Optional<JsonNode> translateBoolean(
@@ -95,7 +95,7 @@ final class ElasticsearchNestedPredicateTranslator
     {
         if (expression instanceof FieldDereference) {
             Optional<FieldContext> field = resolveField(expression, rowArgument, root);
-            if (field.isPresent() && isBoolean(field.get().elasticsearchType())) {
+            if (field.isPresent() && field.get().supportsPredicates() && isBoolean(field.get().elasticsearchType())) {
                 return Optional.of(ElasticsearchQueryBuilder.termQuery(field.get().path(), true));
             }
             return Optional.empty();
@@ -153,7 +153,9 @@ final class ElasticsearchNestedPredicateTranslator
             constant = asConstant(call.getArguments().get(0));
             function = reverse(function);
         }
-        if (field.isEmpty() || constant.isEmpty() || !supportsPredicates(field.get().elasticsearchType())) {
+        if (field.isEmpty() || constant.isEmpty() ||
+                !field.get().supportsPredicates() ||
+                !supportsPredicates(field.get().elasticsearchType())) {
             return Optional.empty();
         }
 
@@ -230,7 +232,8 @@ final class ElasticsearchNestedPredicateTranslator
         return Optional.of(new FieldContext(
                 parent.get().path() + "." + rowField.getName().get(),
                 rowField.getType(),
-                elasticsearchField.get().type()));
+                elasticsearchField.get().type(),
+                elasticsearchField.get().supportsPredicates()));
     }
 
     private static List<IndexMetadata.Field> fields(IndexMetadata.Type type)
@@ -306,5 +309,5 @@ final class ElasticsearchNestedPredicateTranslator
         return JSON.objectNode().set("bool", bool);
     }
 
-    private record FieldContext(String path, Type trinoType, IndexMetadata.Type elasticsearchType) {}
+    private record FieldContext(String path, Type trinoType, IndexMetadata.Type elasticsearchType, boolean supportsPredicates) {}
 }
