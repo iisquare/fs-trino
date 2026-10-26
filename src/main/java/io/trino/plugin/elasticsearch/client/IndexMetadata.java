@@ -47,6 +47,8 @@ public record IndexMetadata(ObjectType schema)
             property = "@type")
     @JsonSubTypes({
             @JsonSubTypes.Type(value = DateTimeType.class, name = "date_time"),
+            // PATCH(fs-trino): preserve Elasticsearch nested mappings so they can be exposed as ARRAY(ROW(...))
+            @JsonSubTypes.Type(value = NestedType.class, name = "nested"),
             @JsonSubTypes.Type(value = ObjectType.class, name = "object"),
             @JsonSubTypes.Type(value = PrimitiveType.class, name = "primitive"),
             @JsonSubTypes.Type(value = ScaledFloatType.class, name = "scaled_float"),
@@ -78,6 +80,18 @@ public record IndexMetadata(ObjectType schema)
             implements Type
     {
         public ObjectType
+        {
+            requireNonNull(fields, "fields is null");
+            fields = ImmutableList.copyOf(fields);
+        }
+    }
+
+    // PATCH(fs-trino): Elasticsearch nested documents retain object boundaries and are always represented as an
+    // array by the connector. Keeping a distinct type prevents them from being mistaken for a single object.
+    public record NestedType(List<Field> fields)
+            implements Type
+    {
+        public NestedType
         {
             requireNonNull(fields, "fields is null");
             fields = ImmutableList.copyOf(fields);

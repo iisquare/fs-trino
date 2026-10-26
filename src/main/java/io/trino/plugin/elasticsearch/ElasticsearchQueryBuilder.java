@@ -14,6 +14,7 @@
 package io.trino.plugin.elasticsearch;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -51,6 +52,7 @@ import static java.time.format.DateTimeFormatter.ISO_DATE_TIME;
 public final class ElasticsearchQueryBuilder
 {
     private static final JsonNodeFactory JSON = JsonNodeFactory.instance;
+    private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
 
     private ElasticsearchQueryBuilder() {}
 
@@ -58,7 +60,8 @@ public final class ElasticsearchQueryBuilder
             TupleDomain<ElasticsearchColumnHandle> constraint,
             Optional<String> query,
             Map<String, String> regexes,
-            Map<String, String> phrases)
+            Map<String, String> phrases,
+            List<ElasticsearchNestedQuery> nestedQueries)
     {
         ArrayNode filterClauses = JSON.arrayNode();
         ArrayNode mustNotClauses = JSON.arrayNode();
@@ -83,6 +86,14 @@ public final class ElasticsearchQueryBuilder
 
         // PATCH(fs-trino): text-column LIKE '%literal%' is pushed down as match_phrase
         phrases.forEach((name, value) -> filterClauses.add(matchPhraseQuery(name, value)));
+
+        // PATCH(fs-trino): any_match over an ARRAY(ROW(...)) is pushed down as an Elasticsearch nested query.
+        for (ElasticsearchNestedQuery nestedQuery : nestedQueries) {
+            ObjectNode nested = JSON.objectNode();
+            nested.put("path", nestedQuery.path());
+            nested.set("query", parseQuery(nestedQuery.query()));
+            filterClauses.add(JSON.objectNode().set("nested", nested));
+        }
 
         query.ifPresent(q -> mustClauses.add(queryStringQuery(q)));
 
@@ -173,7 +184,7 @@ public final class ElasticsearchQueryBuilder
         return shouldClauses.build();
     }
 
-    private static Object getValue(Type type, Object value)
+    static Object getValue(Type type, Object value)
     {
         if (type.equals(BOOLEAN) ||
                 type.equals(TINYINT) ||
@@ -208,14 +219,14 @@ public final class ElasticsearchQueryBuilder
         return JSON.objectNode().set("match_all", JSON.objectNode());
     }
 
-    private static ObjectNode existsQuery(String field)
+    static ObjectNode existsQuery(String field)
     {
         return JSON.objectNode().set(
                 "exists",
                 JSON.objectNode().put("field", field));
     }
 
-    private static ObjectNode termQuery(String field, Object value)
+    static ObjectNode termQuery(String field, Object value)
     {
         return JSON.objectNode().set(
                 "term",
@@ -243,7 +254,7 @@ public final class ElasticsearchQueryBuilder
                 JSON.objectNode().put("query", query));
     }
 
-    private static JsonNode toJsonValue(Object object)
+    static JsonNode toJsonValue(Object object)
     {
         if (object instanceof Boolean value) {
             return JSON.booleanNode(value);
@@ -264,5 +275,15 @@ public final class ElasticsearchQueryBuilder
             return JSON.textNode(value);
         }
         throw new IllegalArgumentException("Unsupported value type: " + object.getClass().getSimpleName());
+    }
+
+    private static JsonNode parseQuery(String query)
+    {
+        try {
+            return JSON_MAPPER.readTree(query);
+        }
+        catch (Exception e) {
+            throw new IllegalArgumentException("Invalid translated nested query: " + query, e);
+        }
     }
 }

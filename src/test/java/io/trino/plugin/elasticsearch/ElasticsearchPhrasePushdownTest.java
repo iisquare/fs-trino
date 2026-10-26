@@ -17,6 +17,7 @@ import io.airlift.slice.Slices;
 import io.trino.spi.predicate.TupleDomain;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -52,7 +53,8 @@ class ElasticsearchPhrasePushdownTest
                         TupleDomain.all(),
                         Optional.empty(),
                         Map.of(),
-                        Map.of("name", "建设工程"))
+                        Map.of("name", "建设工程"),
+                        List.of())
                         .toString());
     }
 

@@ -13,12 +13,14 @@
  */
 package io.trino.plugin.elasticsearch;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ConnectorTableHandle;
 import io.trino.spi.predicate.TupleDomain;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -35,6 +37,8 @@ public record ElasticsearchTableHandle(
         Map<String, String> regexes,
         // PATCH(fs-trino): match_phrase queries pushed down for text-column LIKE '%literal%'
         Map<String, String> phrases,
+        // PATCH(fs-trino): any_match queries pushed down as Elasticsearch nested queries
+        List<ElasticsearchNestedQuery> nestedQueries,
         Optional<String> query,
         OptionalLong limit,
         Set<ElasticsearchColumnHandle> columns)
@@ -53,6 +57,7 @@ public record ElasticsearchTableHandle(
                 TupleDomain.all(),
                 ImmutableMap.of(),
                 ImmutableMap.of(),
+                ImmutableList.of(),
                 query,
                 OptionalLong.empty(),
                 ImmutableSet.of());
@@ -67,6 +72,7 @@ public record ElasticsearchTableHandle(
                 constraint,
                 regexes,
                 phrases,
+                nestedQueries,
                 query,
                 limit,
                 columns);
@@ -80,6 +86,7 @@ public record ElasticsearchTableHandle(
         requireNonNull(constraint, "constraint is null");
         regexes = ImmutableMap.copyOf(regexes);
         phrases = ImmutableMap.copyOf(phrases);
+        nestedQueries = ImmutableList.copyOf(nestedQueries);
         columns = ImmutableSet.copyOf(columns);
         requireNonNull(query, "query is null");
         requireNonNull(limit, "limit is null");
@@ -103,6 +110,13 @@ public record ElasticsearchTableHandle(
             attributes.append("phrases=[");
             attributes.append(phrases.entrySet().stream()
                     .map(phrase -> phrase.getKey() + ":" + phrase.getValue())
+                    .collect(Collectors.joining(", ")));
+            attributes.append("]");
+        }
+        if (!nestedQueries.isEmpty()) {
+            attributes.append("nestedQueries=[");
+            attributes.append(nestedQueries.stream()
+                    .map(nestedQuery -> nestedQuery.path() + ":" + nestedQuery.query())
                     .collect(Collectors.joining(", ")));
             attributes.append("]");
         }

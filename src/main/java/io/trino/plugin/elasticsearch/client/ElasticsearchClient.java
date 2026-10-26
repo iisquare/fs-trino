@@ -482,7 +482,8 @@ public class ElasticsearchClient
         });
     }
 
-    private IndexMetadata.ObjectType parseType(JsonNode properties, JsonNode metaProperties)
+    // PATCH(fs-trino): package-private and static so the mapping parser can be covered without an Elasticsearch server.
+    static IndexMetadata.ObjectType parseType(JsonNode properties, JsonNode metaProperties)
     {
         ImmutableList.Builder<IndexMetadata.Field> result = ImmutableList.builder();
         for (Entry<String, JsonNode> field : properties.properties()) {
@@ -516,12 +517,20 @@ public class ElasticsearchClient
                     result.add(new IndexMetadata.Field(asRawJson, isArray, name, new IndexMetadata.DateTimeType(formats)));
                 }
                 case "scaled_float" -> result.add(new IndexMetadata.Field(asRawJson, isArray, name, new IndexMetadata.ScaledFloatType(value.get("scaling_factor").asDouble())));
-                case "nested", "object" -> {
+                case "object" -> {
                     if (value.has("properties")) {
                         result.add(new IndexMetadata.Field(asRawJson, isArray, name, parseType(value.get("properties"), metaNode)));
                     }
                     else {
                         LOG.debug("Ignoring empty object field: %s", name);
+                    }
+                }
+                case "nested" -> {
+                    if (value.has("properties")) {
+                        result.add(new IndexMetadata.Field(asRawJson, isArray, name, new IndexMetadata.NestedType(parseType(value.get("properties"), metaNode).fields())));
+                    }
+                    else {
+                        LOG.debug("Ignoring empty nested field: %s", name);
                     }
                 }
                 default -> result.add(new IndexMetadata.Field(asRawJson, isArray, name, new IndexMetadata.PrimitiveType(type)));
@@ -555,7 +564,7 @@ public class ElasticsearchClient
         return new IndexMetadata.ObjectType(result.build());
     }
 
-    private JsonNode nullSafeNode(JsonNode jsonNode, String name)
+    private static JsonNode nullSafeNode(JsonNode jsonNode, String name)
     {
         if (jsonNode == null || jsonNode.isNull() || jsonNode.get(name) == null) {
             return NullNode.getInstance();

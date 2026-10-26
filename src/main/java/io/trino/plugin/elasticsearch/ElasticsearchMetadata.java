@@ -26,6 +26,7 @@ import io.trino.plugin.elasticsearch.client.IndexMetadata;
 import io.trino.plugin.elasticsearch.client.IndexMetadata.DateTimeType;
 // PATCH(fs-trino)
 import io.trino.plugin.elasticsearch.client.IndexMetadata.MultiFieldType;
+import io.trino.plugin.elasticsearch.client.IndexMetadata.NestedType;
 import io.trino.plugin.elasticsearch.client.IndexMetadata.ObjectType;
 import io.trino.plugin.elasticsearch.client.IndexMetadata.PrimitiveType;
 import io.trino.plugin.elasticsearch.client.IndexMetadata.ScaledFloatType;
@@ -114,6 +115,7 @@ import static io.trino.plugin.base.projection.ApplyProjectionUtil.extractSupport
 import static io.trino.plugin.base.projection.ApplyProjectionUtil.replaceWithNewVariables;
 import static io.trino.plugin.elasticsearch.ElasticsearchTableHandle.Type.QUERY;
 import static io.trino.plugin.elasticsearch.ElasticsearchTableHandle.Type.SCAN;
+import static io.trino.plugin.elasticsearch.ElasticsearchNestedPredicateTranslator.translateAnyMatch;
 import static io.trino.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.expression.StandardFunctions.LIKE_FUNCTION_NAME;
@@ -296,12 +298,22 @@ public class ElasticsearchMetadata
             return new TypeAndDecoder(VARCHAR, new RawJsonDecoder.Descriptor(path));
         }
 
+        IndexMetadata.Type type = field.type();
+        // PATCH(fs-trino): nested documents preserve object boundaries and are always a collection. Map them to an
+        // array of rows even when Elasticsearch stores a single object or _meta.trino accidentally sets isArray=true.
+        if (type instanceof NestedType nestedType) {
+            TypeAndDecoder row = toTrinoRow(path, nestedType.fields());
+            if (row != null) {
+                return new TypeAndDecoder(new ArrayType(row.type()), new ArrayDecoder.Descriptor(row.decoderDescriptor()));
+            }
+            return null;
+        }
+
         if (field.isArray()) {
             TypeAndDecoder element = toTrino(path, elementField(field));
             return new TypeAndDecoder(new ArrayType(element.type()), new ArrayDecoder.Descriptor(element.decoderDescriptor()));
         }
 
-        IndexMetadata.Type type = field.type();
         // PATCH(fs-trino): keyword multi-field (e.g. name.keyword). Such values do not exist in _source, they are
         // fetched through the hits "fields" section, see ScanQueryPageSource.
         if (type instanceof MultiFieldType) {
@@ -332,26 +344,32 @@ public class ElasticsearchMetadata
             // otherwise, skip -- we don't support custom formats, yet
         }
         else if (type instanceof ObjectType objectType) {
-            ImmutableList.Builder<RowType.Field> rowFieldsBuilder = ImmutableList.builder();
-            ImmutableList.Builder<RowDecoder.NameAndDescriptor> decoderFields = ImmutableList.builder();
-            for (IndexMetadata.Field rowField : objectType.fields()) {
-                String name = rowField.name();
-                TypeAndDecoder child = toTrino(path, rowField);
-
-                if (child != null) {
-                    decoderFields.add(new RowDecoder.NameAndDescriptor(name, child.decoderDescriptor()));
-                    rowFieldsBuilder.add(RowType.field(name, child.type()));
-                }
-            }
-
-            List<RowType.Field> rowFields = rowFieldsBuilder.build();
-            if (!rowFields.isEmpty()) {
-                return new TypeAndDecoder(RowType.from(rowFields), new RowDecoder.Descriptor(path, decoderFields.build()));
-            }
-
-            // otherwise, skip -- row types must have at least 1 field
+            return toTrinoRow(path, objectType.fields());
         }
 
+        return null;
+    }
+
+    private TypeAndDecoder toTrinoRow(String path, List<IndexMetadata.Field> fields)
+    {
+        ImmutableList.Builder<RowType.Field> rowFieldsBuilder = ImmutableList.builder();
+        ImmutableList.Builder<RowDecoder.NameAndDescriptor> decoderFields = ImmutableList.builder();
+        for (IndexMetadata.Field rowField : fields) {
+            String name = rowField.name();
+            TypeAndDecoder child = toTrino(path, rowField);
+
+            if (child != null) {
+                decoderFields.add(new RowDecoder.NameAndDescriptor(name, child.decoderDescriptor()));
+                rowFieldsBuilder.add(RowType.field(name, child.type()));
+            }
+        }
+
+        List<RowType.Field> rowFields = rowFieldsBuilder.build();
+        if (!rowFields.isEmpty()) {
+            return new TypeAndDecoder(RowType.from(rowFields), new RowDecoder.Descriptor(path, decoderFields.build()));
+        }
+
+        // Row types must have at least one field.
         return null;
     }
 
@@ -511,6 +529,7 @@ public class ElasticsearchMetadata
                 handle.constraint(),
                 handle.regexes(),
                 handle.phrases(),
+                handle.nestedQueries(),
                 handle.query(),
                 OptionalLong.of(limit),
                 ImmutableSet.of());
@@ -548,9 +567,19 @@ public class ElasticsearchMetadata
         ConnectorExpression oldExpression = constraint.getExpression();
         Map<String, String> newRegexes = new HashMap<>(handle.regexes());
         Map<String, String> newPhrases = new HashMap<>(handle.phrases());
+        List<ElasticsearchNestedQuery> newNestedQueries = new ArrayList<>(handle.nestedQueries());
         List<ConnectorExpression> expressions = ConnectorExpressions.extractConjuncts(constraint.getExpression());
         List<ConnectorExpression> notHandledExpressions = new ArrayList<>();
         for (ConnectorExpression expression : expressions) {
+            // PATCH(fs-trino): translate any_match on a nested ARRAY(ROW(...)) into an Elasticsearch nested query.
+            Optional<ElasticsearchNestedQuery> nestedQuery = translateAnyMatch(expression, constraint.getAssignments());
+            if (nestedQuery.isPresent()) {
+                if (!newNestedQueries.contains(nestedQuery.get())) {
+                    newNestedQueries.add(nestedQuery.get());
+                }
+                continue;
+            }
+
             if (expression instanceof Call call) {
                 if (isSupportedLikeCall(call)) {
                     List<ConnectorExpression> arguments = call.getArguments();
@@ -599,6 +628,7 @@ public class ElasticsearchMetadata
                 newDomain,
                 newRegexes,
                 newPhrases,
+                newNestedQueries,
                 handle.query(),
                 handle.limit(),
                 ImmutableSet.of());

@@ -48,7 +48,8 @@ class CountQueryPageSource
                         table.constraint().transformKeys(ElasticsearchColumnHandle.class::cast),
                         table.query(),
                         table.regexes(),
-                        table.phrases()));
+                        table.phrases(),
+                        table.nestedQueries()));
         readTimeNanos = System.nanoTime() - start;
 
         if (table.limit().isPresent()) {
